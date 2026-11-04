@@ -68,7 +68,7 @@ We only **import** its code; nothing in `LeFusion/` is changed or installed.
 
 ## 3. Create the virtual environment
 
-Open a terminal **in the project folder** (`Aneurysm_dataset/`).
+Open a terminal **in the project folder** (`Aneurysm_dataset/`)..
 
 ### Windows (PowerShell)
 ```powershell
