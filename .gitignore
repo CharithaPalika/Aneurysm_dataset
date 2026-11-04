@@ -9,6 +9,8 @@ work/
 outputs/
 
 # ---- Python / Jupyter ----
+# virtual environment (too large for GitHub; re-create it with installation.md)
+aneurysmgen_env/
 __pycache__/
 *.py[cod]
 .ipynb_checkpoints/
@@ -19,4 +21,3 @@ __pycache__/
 Thumbs.db
 .vscode/
 .idea/
-venv/

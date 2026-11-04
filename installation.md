@@ -1,15 +1,15 @@
 # Installation
 
 Everything uses **Python 3.10 + `venv` + `pip`** (no conda).
-The virtual environment lives in the project folder as **`venv/`**.
+The virtual environment lives in the project folder as **`aneurysmgen_env/`**.
 
 - **Windows + NVIDIA GPU**: training (`02_train_lefusion.ipynb`)
 - **macOS**: data preparation (`01_dataset.ipynb`), no GPU training
 
-> **About moving `venv/` between computers:** a venv stores the full path of the
+> **About moving `aneurysmgen_env/` between computers:** a venv stores the full path of the
 > Python it was made with and contains OS-specific files. A venv made on the Mac
 > will **not** run on Windows, and usually not on another Windows PC either.
-> When you move the project, keep `venv/` if you like, but on the new machine
+> When you move the project, keep `aneurysmgen_env/` if you like, but on the new machine
 > **delete it and re-create it** with the steps below (5 minutes, same
 > packages, because `requirements.txt` pins every version).
 
@@ -74,27 +74,27 @@ Open a terminal **in the project folder** (`Aneurysm_dataset/`).
 ```powershell
 cd "C:\path\to\Aneurysm_dataset"
 
-# 1) create venv/ with Python 3.10
-py -3.10 -m venv venv
+# 1) create aneurysmgen_env/ with Python 3.10
+py -3.10 -m venv aneurysmgen_env
 
-# 2) activate it (prompt changes to "(venv) ...")
-.\venv\Scripts\Activate.ps1
+# 2) activate it (prompt changes to "(aneurysmgen_env) ...")
+.\aneurysmgen_env\Scripts\Activate.ps1
 ```
 If PowerShell says *"running scripts is disabled"*, run this once, then activate again:
 ```powershell
 Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 ```
-(Command Prompt instead of PowerShell: `venv\Scripts\activate.bat`)
+(Command Prompt instead of PowerShell: `aneurysmgen_env\Scripts\activate.bat`)
 
 ### macOS (Terminal)
 ```bash
 cd "/path/to/Aneurysm_dataset"
 
-# 1) create venv/ with Python 3.10
-python3.10 -m venv venv
+# 1) create aneurysmgen_env/ with Python 3.10
+python3.10 -m venv aneurysmgen_env
 
-# 2) activate it (prompt changes to "(venv) ...")
-source venv/bin/activate
+# 2) activate it (prompt changes to "(aneurysmgen_env) ...")
+source aneurysmgen_env/bin/activate
 ```
 
 ---
@@ -130,7 +130,7 @@ Then run the check again. If it is still `False`, update the NVIDIA driver (`nvi
 
 So notebooks run with this venv's packages:
 ```bash
-python -m ipykernel install --user --name aneurysm --display-name "Python (aneurysm venv)"
+python -m ipykernel install --user --name aneurysmgen_env --display-name "Python (aneurysmgen_env)"
 ```
 
 ---
@@ -141,7 +141,7 @@ With the venv activated, in the project folder:
 ```bash
 jupyter lab
 ```
-In Jupyter, open a notebook and choose the kernel **"Python (aneurysm venv)"** (top right).
+In Jupyter, open a notebook and choose the kernel **"Python (aneurysmgen_env)"** (top right).
 
 | Order | Notebook | Where | What it does |
 |---|---|---|---|
@@ -151,7 +151,7 @@ In Jupyter, open a notebook and choose the kernel **"Python (aneurysm venv)"** (
 Notebook 2 prepares the data itself, so on Windows you can run it directly.
 Settings are in `configs/data.yaml` and `configs/lefusion_train.yaml`.
 
-**VS Code instead of Jupyter Lab:** open the folder, open a notebook, *Select Kernel* → *Python Environments* → `venv`.
+**VS Code instead of Jupyter Lab:** open the folder, open a notebook, *Select Kernel* → *Python Environments* → `aneurysmgen_env`.
 
 ---
 
@@ -160,13 +160,13 @@ Settings are in `configs/data.yaml` and `configs/lefusion_train.yaml`.
 **Windows**
 ```powershell
 cd "C:\path\to\Aneurysm_dataset"
-.\venv\Scripts\Activate.ps1
+.\aneurysmgen_env\Scripts\Activate.ps1
 jupyter lab
 ```
 **macOS**
 ```bash
 cd "/path/to/Aneurysm_dataset"
-source venv/bin/activate
+source aneurysmgen_env/bin/activate
 jupyter lab
 ```
 Leave the venv with `deactivate`.
@@ -176,9 +176,9 @@ Leave the venv with `deactivate`.
 ## 8. Moving the project to another computer
 
 1. Copy the project folder (with `Dataset/`; `work/` and `outputs/` are optional — they are re-created).
-2. On the new computer, delete the old venv and make a new one:
-   - Windows: `Remove-Item -Recurse -Force venv`
-   - macOS: `rm -rf venv`
+2. On the new computer, delete the old environment and make a new one:
+   - Windows: `Remove-Item -Recurse -Force aneurysmgen_env`
+   - macOS: `rm -rf aneurysmgen_env`
 3. Repeat steps 3 → 5.
 
 Paths in `work/` (splits, patch index) are stored **relative to the project folder**, so they work on any computer. Keep `work/splits/splits.csv` when moving: it fixes which patient is in train / val / test.
@@ -189,8 +189,8 @@ Paths in `work/` (splits, patch index) are stored **relative to the project fold
 
 | Problem | Fix |
 |---|---|
-| `py` not found (Windows) | Re-run the Python installer and tick "Add python.exe to PATH", or use the full path, e.g. `C:\Users\<you>\AppData\Local\Programs\Python\Python310\python.exe -m venv venv` |
-| `No module named aneurysm` in a notebook | Start Jupyter **from the project folder**, and pick the "Python (aneurysm venv)" kernel |
+| `py` not found (Windows) | Re-run the Python installer and tick "Add python.exe to PATH", or use the full path, e.g. `C:\Users\<you>\AppData\Local\Programs\Python\Python310\python.exe -m venv aneurysmgen_env` |
+| `No module named aneurysm` in a notebook | Start Jupyter **from the project folder**, and pick the "Python (aneurysmgen_env)" kernel |
 | `LeFusion code not found` | `LeFusion/LeFusion/ddpm/diffusion.py` must exist: clone LeFusion into the project folder (step 2) |
 | `Out of GPU memory` in the memory check | In `02_train_lefusion.ipynb` set `TRAIN_OVERRIDES = {"base_channels": 32}` |
 | Very slow first run of notebook 1 | Normal: patches are cut once and cached in `work/patches/` |
