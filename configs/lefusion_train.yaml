@@ -1,0 +1,49 @@
+# =====================================================================
+#  LeFusion training settings (read by src/aneurysm/lefusion/config.py)
+#  Patch size comes from configs/data.yaml (patch_size, patch_depth).
+#  Any value can be overridden in 02_train_lefusion.ipynb (TRAIN_OVERRIDES).
+# =====================================================================
+
+# ---- Run ----
+run_name: pilot_64x64x32          # outputs go to <output_dir>/<run_name>/
+output_dir: outputs               # logs, metrics, samples and checkpoints of all runs
+resume: true                      # continue from <run>/checkpoints/latest.pt if it exists
+seed: 42                          # same seed + same data + same settings -> same run
+deterministic: true               # deterministic cuDNN (a bit slower, more reproducible)
+
+# ---- Network (LeFusion Unet3D) ----
+base_channels: 64                 # paper: 64. Use 32 if the GPU runs out of memory
+dim_mults: [1, 2, 4, 8]           # channels per level = base_channels * mult
+attn_heads: 8
+attn_dim_head: 32
+
+# ---- Diffusion ----
+timesteps: 300                    # LeFusion code: 300, cosine schedule
+loss_type: l1                     # l1 (LeFusion code) or l2
+
+# ---- Optimisation ----
+lr: 1.0e-4
+batch_size: 1                     # per forward pass; 4 GB GPU -> 1
+grad_accum: 4                     # effective batch = batch_size * grad_accum
+max_steps: 10000                  # optimiser steps (README: 20k-50k for full data)
+grad_clip: 1.0                    # max gradient norm (null = off)
+amp: true                         # mixed precision (fp16) on CUDA
+num_workers: null                 # null = automatic (0 on Mac, 2 on Windows)
+
+# ---- EMA (smoothed copy of the weights, used for samples) ----
+ema_decay: 0.995
+ema_start: 2000                   # copy weights until this step, then average
+ema_every: 10
+
+# ---- Logging, evaluation, checkpoints ----
+log_every: 50                     # print train loss every N steps
+eval_every: 500                   # validation loss every N steps
+eval_max_batches: 50              # cap on validation batches per evaluation
+eval_timesteps: [30, 150, 270]    # fixed noise levels -> comparable val loss (must be < timesteps)
+sample_every: 2000                # save preview samples every N steps (0 = off)
+n_samples: 2                      # preview samples per check (from the val split)
+sample_jump_length: 5             # RePaint settings for previews
+sample_jump_n_sample: 2
+save_every: 1000                  # checkpoint every N steps
+keep_last: 3                      # keep the last N step_*.pt (latest.pt and best.pt always kept)
+memory_check: true                # one forward+backward first, print peak GPU memory

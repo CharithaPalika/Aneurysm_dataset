@@ -1,0 +1,24 @@
+\documentclass[border=10pt]{standalone}
+\input{style}
+\begin{document}
+\begin{tikzpicture}[x=1mm,y=1mm]
+\node[ttl, anchor=west] at (-18,46) {LeFusion -- Training};
+% inputs
+\node[dk] (x0) at (0,10) {Real aneurysm patch $\x_0$\\[1pt]\footnotesize $64^3$ CTA};
+\node[dk] (h) at (0,-12) {Histogram $h$\\[1pt]\footnotesize 16 bins, HU inside $M_f$};
+\node[dk] (mf) at (0,-34) {Aneurysm mask $M_f$};
+\node[lt] (eps) at (48,30) {Random noise $\bm\epsilon$\\random step $t$};
+\node[lt, minimum width=48mm] (nz) at (48,10) {Add noise\\[1pt]$\x_t=\sqrt{\bar\alpha_t}\,\x_0+\sqrt{1-\bar\alpha_t}\,\bm\epsilon$};
+\node[dk, minimum width=46mm, minimum height=30mm] (u) at (108,0) {\textbf{3D U-Net}\\(image space)\\[3pt]\footnotesize \textbf{inputs:} noisy patch $\x_t$,\\\footnotesize step $t$, histogram $h$\\[2pt]\footnotesize (mask is \emph{not} an input)};
+\node[lt] (eh) at (160,0) {Predicted noise $\hat{\bm\epsilon}$\\\footnotesize (output, $64^3$)};
+\node[ls, minimum width=50mm] (loss) at (160,-34) {\textbf{Loss inside the mask}\\[1pt]$\mathrm{mean}\,|M_f\odot\bm\epsilon-M_f\odot\hat{\bm\epsilon}|$};
+\draw[ar] (x0)--(nz); \draw[ar] (eps)--(nz);
+\draw[ar] (nz.east) -- node[lb,above]{$\x_t$} (nz.east -| u.west);
+\draw[ar] (h.east) -- node[lb,above,pos=0.7]{$h$} (h.east -| u.west);
+\draw[ar] (eps.east) -- node[lb,above,pos=0.6]{$t$} (eps.east -| u.north) -- (u.north);
+\draw[ar] (u)--(eh); \draw[ar] (eh)--(loss);
+\draw[ard] (mf.east) -- node[lb,below,text=rloss]{mask only chooses where the loss counts} (loss.west);
+\draw[ard] (eps.east) -- (190,30) |- node[lb,pos=0.3,right,text=rloss]{true $\bm\epsilon$} (loss.east);
+\node[nt, text width=160mm, anchor=north west] at (-18,-48) {\textbf{Idea:} the network learns to clean a noisy aneurysm patch, but is graded only on the aneurysm voxels. No healthy image is needed.};
+\end{tikzpicture}
+\end{document}

@@ -1,0 +1,47 @@
+# =====================================================================
+#  Aneurysm CTA project - Python 3.10
+#
+#  Install: see installation.md (Python 3.10 + venv + pip)
+#
+#  PyTorch comes from the CUDA 12.1 index below. If pip still installs a
+#  CPU build on Windows, run this once, then pip install -r requirements.txt again:
+#     pip install torch==2.1.2 torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cu121
+#  Check:  python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+#
+#  On macOS the same file works: pip falls back to the normal macOS build
+#  of torch (CPU / Apple MPS).
+# =====================================================================
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+# ---- Deep learning ----
+torch==2.1.2
+torchvision==0.16.2
+
+# ---- Scientific stack ----
+numpy==1.26.4
+scipy==1.11.4
+pandas==2.1.4
+scikit-image==0.22.0
+scikit-learn==1.3.2
+
+# ---- Medical imaging ----
+nibabel==5.2.1
+torchio==0.18.80
+
+# ---- Notebooks, plots, progress ----
+jupyterlab==4.0.10
+ipykernel==6.28.0
+ipywidgets==8.1.1
+matplotlib==3.8.2
+tqdm==4.66.1
+
+# ---- Needed by the LeFusion code (LeFusion/ folder) ----
+einops==0.4.1
+einops-exts==0.0.3
+rotary-embedding-torch==0.1.5
+ema-pytorch==0.0.8
+hydra-core==1.3.2
+omegaconf==2.3.0
+pyyaml==6.0.1
+blobfile==2.1.1
+opencv-python==4.10.0.84

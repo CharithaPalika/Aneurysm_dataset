@@ -1,0 +1,35 @@
+# =====================================================================
+#  Dataset settings  (read by src/aneurysm/config.py -> load_data_config)
+#  Paths are relative to the project folder.
+#  After changing anything under "Patches" or "Preprocessing",
+#  re-cut the patches once: build_patch_index(..., overwrite=True)
+# =====================================================================
+
+# ---- Raw data ----
+scans_subdir: Dataset/CTA_scans                        # holds internal_Tr01, internal_Tr02, ...
+scan_folder_glob: "internal_*"                         # which sub-folders of CTA_scans to read
+masks_subdir: Dataset/Annotations/internal_annotation
+instances_csv: Dataset/internal_instances.csv
+
+# ---- Outputs made by the code ----
+work_subdir: work                                      # splits/ and patches/ are written here
+
+# ---- Split (by patient) ----
+val_frac: 0.15
+test_frac: 0.15
+split_seed: 42
+official_test_as_test: true      # Ts cases (once their scans exist) always go to "test"
+
+# ---- Preprocessing ----
+spacing_mm: 0.45                 # isotropic voxel size of the patches
+hu_min: -100.0                   # intensity window given to the model
+hu_max: 900.0
+air_hu: -1024.0                  # padding value outside the scan
+min_component_voxels: 20         # smaller mask blobs are treated as noise
+
+# ---- Patches ----
+patch_size: 64                   # in-plane size H = W
+patch_depth: 32                  # number of slices D (null = same as patch_size, i.e. 64^3)
+                                 # 32 for the pilot on the 4 GB GPU
+patch_margin: 8                  # extra voxels per side stored on disk (random shifts)
+hist_bins: 16                    # LeFusion histogram size

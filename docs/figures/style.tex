@@ -1,0 +1,22 @@
+\usepackage{mathptmx}
+\usepackage{amsmath,bm}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit,calc,backgrounds}
+\definecolor{gdark}{HTML}{5E7B5F}
+\definecolor{glight}{HTML}{E6E9E4}
+\definecolor{gbord}{HTML}{4A634B}
+\definecolor{rloss}{HTML}{A8323E}
+\definecolor{rsoft}{HTML}{F3DCDD}
+\definecolor{note}{HTML}{F4F1E8}
+\tikzset{
+  dk/.style={draw=gbord,fill=gdark,text=white,rounded corners=3pt,align=center,font=\small,minimum height=12mm,minimum width=30mm,inner sep=5pt},
+  lt/.style={draw=gray!60,fill=glight,text=black,rounded corners=3pt,align=center,font=\small,minimum height=12mm,minimum width=30mm,inner sep=5pt},
+  ls/.style={draw=rloss,fill=rsoft,text=black,rounded corners=3pt,align=center,font=\small,minimum height=12mm,minimum width=30mm,inner sep=5pt,line width=0.8pt},
+  nt/.style={draw=gray!50,fill=note,text=black!80,rounded corners=3pt,align=left,font=\footnotesize,inner sep=6pt},
+  ar/.style={-{Stealth[length=2.6mm]},line width=0.8pt,draw=black!75},
+  ard/.style={-{Stealth[length=2.6mm]},line width=0.8pt,draw=rloss,dashed},
+  lb/.style={font=\footnotesize\itshape,text=black!70,align=center},
+  frame/.style={draw=gbord,rounded corners=6pt,dashed,line width=0.7pt,inner sep=8pt},
+  ttl/.style={font=\large\bfseries,text=black}
+}
+\newcommand{\x}{\bm{x}}
