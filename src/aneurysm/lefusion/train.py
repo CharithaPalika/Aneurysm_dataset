@@ -48,6 +48,7 @@ from ..data.pipeline import prepare_data
 from ..env import default_num_workers, describe_environment, get_device
 from .config import TrainConfig
 from .model import build_diffusion, count_parameters
+from .sample import generate, norm_to_hu, plot_rows
 
 
 # ======================================================================
@@ -142,11 +143,6 @@ def _forever(loader):
             yield batch
 
 
-def _to_hu(v: float, cfg: DataConfig) -> float:
-    """Normalised value in [-1, 1] -> HU."""
-    return (v + 1.0) / 2.0 * (cfg.hu_max - cfg.hu_min) + cfg.hu_min
-
-
 def _gpu_mem_gb(device) -> float:
     return torch.cuda.max_memory_allocated(device) / 1024**3 if device.type == "cuda" else 0.0
 
@@ -224,57 +220,27 @@ def evaluate(diffusion, loader, device, timesteps: list[int], max_batches: int, 
 @torch.no_grad()
 def save_samples(ema_diffusion, items: list[dict], data_cfg: DataConfig, train_cfg: TrainConfig,
                  device, out_path: Path, amp: bool, seed: int) -> list[dict]:
-    """Rebuild the centred aneurysm of a few val patches (RePaint loop) and save one PNG.
+    """Rebuild the centred aneurysm of a few val patches and save one PNG (training preview).
 
-    The real background is put back outside the mask afterwards. Runs with its own
-    seed, so previews are comparable between steps and the training RNG is untouched.
+    Uses the same generation code as the evaluation notebook (lefusion/sample.py).
     Returns mean HU inside the mask (real vs generated) for each sample.
     """
-    from omegaconf import OmegaConf
-    import matplotlib.pyplot as plt
-
-    conf = OmegaConf.create({
-        "schedule_jump_params": {"t_T": train_cfg.timesteps, "n_sample": 1,
-                                 "jump_length": train_cfg.sample_jump_length,
-                                 "jump_n_sample": train_cfg.sample_jump_n_sample},
-        "inpa_inj_sched_prev_cumnoise": False,
-        "inpa_inj_time_shift": 1,
-    })
     gt = torch.stack([it["image"] for it in items]).to(device)
     msk = torch.stack([it["center_mask"] for it in items]).to(device)
     hist = torch.stack([it["hist"] for it in items]).to(device)
+    gen = generate(ema_diffusion, gt, msk, hist, timesteps=train_cfg.timesteps,
+                   jump_length=train_cfg.sample_jump_length, jump_n_sample=train_cfg.sample_jump_n_sample,
+                   amp=amp, seed=seed)
 
-    saved = _rng_state()
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    ema_diffusion.eval()
-    with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=amp):
-        gen = ema_diffusion.p_sample_loop_repaint(
-            shape=tuple(gt.shape), model_kwargs={"gt": gt, "gt_keep_mask": msk},
-            device=device, progress=False, conf=conf, cond=hist,
-        )
-    _set_rng_state(saved)
-    gen = gen.float() * msk + gt * (1 - msk)             # real background outside the mask
-
-    stats, n = [], len(items)
-    fig, axs = plt.subplots(n, 3, figsize=(9, 3 * n), squeeze=False)
-    for k in range(n):
+    stats, rows = [], []
+    for k, it in enumerate(items):
         g, r, m = gen[k, 0].cpu().numpy(), gt[k, 0].cpu().numpy(), msk[k, 0].cpu().numpy()
-        z = int(np.argmax(m.sum(axis=(1, 2)))) if m.any() else g.shape[0] // 2
-        real_hu = _to_hu(float(r[m > 0].mean()), data_cfg) if m.any() else float("nan")
-        gen_hu = _to_hu(float(g[m > 0].mean()), data_cfg) if m.any() else float("nan")
-        stats.append({"patch_id": items[k]["patch_id"], "real_hu": real_hu, "gen_hu": gen_hu})
-        panels = [(r, f"real ({real_hu:.0f} HU)", "gray", -1), (g, f"generated ({gen_hu:.0f} HU)", "gray", -1),
-                  (np.abs(g - r), "|difference|", "magma", 0)]
-        for j, (img, title, cmap, vmin) in enumerate(panels):
-            axs[k, j].imshow(img[z], cmap=cmap, vmin=vmin, vmax=1, origin="lower")
-            axs[k, j].contour(m[z], levels=[0.5], colors="r", linewidths=0.8, origin="lower")
-            axs[k, j].set_title(f"{items[k]['patch_id']}: {title}", fontsize=8)
-            axs[k, j].axis("off")
-    plt.tight_layout()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=110)
-    plt.close(fig)
+        real_hu = float(norm_to_hu(r[m > 0].mean(), data_cfg)) if m.any() else float("nan")
+        gen_hu = float(norm_to_hu(g[m > 0].mean(), data_cfg)) if m.any() else float("nan")
+        stats.append({"patch_id": it["patch_id"], "real_hu": real_hu, "gen_hu": gen_hu})
+        rows.append({"real": r, "gen": g, "mask": m,
+                     "label": f"{it['patch_id']} (real {real_hu:.0f} / gen {gen_hu:.0f} HU)"})
+    plot_rows(rows, out_path=out_path, show=False)
     return stats
 
 
@@ -332,8 +298,20 @@ def train(data_cfg: DataConfig, train_cfg: TrainConfig) -> dict:
     latest = ckpt_dir / "latest.pt"
     if train_cfg.resume and latest.exists():
         ck = torch.load(latest, map_location=device)
-        if ck.get("patch_tag") != data_cfg.patch_tag:
-            say(f"Warning: checkpoint used patches '{ck.get('patch_tag')}', now '{data_cfg.patch_tag}'.")
+        # the network shape must be the same as in the checkpoint, otherwise the weights do not fit
+        arch_keys = ("base_channels", "dim_mults", "attn_heads", "attn_dim_head", "timesteps")
+        old = ck.get("train_cfg", {})
+        changed = {k: (old.get(k), getattr(train_cfg, k)) for k in arch_keys
+                   if k in old and list(np.atleast_1d(old.get(k))) != list(np.atleast_1d(getattr(train_cfg, k)))}
+        if changed or ck.get("patch_tag") != data_cfg.patch_tag:
+            logger.close()
+            details = ", ".join(f"{k}: checkpoint {v[0]} vs now {v[1]}" for k, v in changed.items())
+            if ck.get("patch_tag") != data_cfg.patch_tag:
+                details += (", " if details else "") + f"patches: checkpoint {ck.get('patch_tag')} vs now {data_cfg.patch_tag}"
+            raise ValueError(
+                f"Run '{train_cfg.run_name}' already has a checkpoint made with different settings ({details}). "
+                f"Use a new run_name in TRAIN_OVERRIDES to start a fresh run with these settings."
+            )
         diffusion.denoise_fn.load_state_dict(ck["model"])
         ema.model.denoise_fn.load_state_dict(ck["ema"])
         opt.load_state_dict(ck["opt"])
@@ -368,8 +346,20 @@ def train(data_cfg: DataConfig, train_cfg: TrainConfig) -> dict:
                 loss = diffusion(x=(b["image"].to(device), b["hist"].to(device)), mask=b["center_mask"].to(device))
             scaler.scale(loss).backward()
             opt.zero_grad(set_to_none=True)
-            say(f"Memory check OK: peak GPU memory {_gpu_mem_gb(device):.2f} GB of "
-                f"{env.get('gpu_memory_gb')} GB (batch {train_cfg.batch_size})")
+            # peak memory reserved by PyTorch, plus ~0.4 GB for the CUDA context itself
+            peak = torch.cuda.max_memory_reserved(device) / 1024**3 + 0.4
+            total = torch.cuda.get_device_properties(device).total_memory / 1024**3
+            if peak > 0.92 * total:
+                logger.close()
+                raise RuntimeError(
+                    f"The model needs about {peak:.1f} GB but the GPU has {total:.1f} GB. "
+                    "On Windows the driver then silently moves memory to 'shared GPU memory' "
+                    "(system RAM), which makes training extremely slow. Make the model smaller: "
+                    "TRAIN_OVERRIDES = {'base_channels': 32}  (then 24 or 16), or a smaller patch "
+                    "in DATA_OVERRIDES (e.g. {'patch_depth': 24})."
+                )
+            say(f"Memory check OK: about {peak:.2f} GB needed of {total:.1f} GB "
+                f"(batch {train_cfg.batch_size})")
         except torch.cuda.OutOfMemoryError:
             logger.close()
             raise RuntimeError(

@@ -12,7 +12,7 @@ seed: 42                          # same seed + same data + same settings -> sam
 deterministic: true               # deterministic cuDNN (a bit slower, more reproducible)
 
 # ---- Network (LeFusion Unet3D) ----
-base_channels: 64                 # paper: 64. Use 32 if the GPU runs out of memory
+base_channels: 32                 # paper: 64. 32 for the 4 GB pilot GPU (64 does not fit)
 dim_mults: [1, 2, 4, 8]           # channels per level = base_channels * mult
 attn_heads: 8
 attn_dim_head: 32

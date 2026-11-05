@@ -1,0 +1,33 @@
+# =====================================================================
+#  LeFusion evaluation settings (read by src/aneurysm/lefusion/config.py)
+#  Results go to outputs/<run_name>/eval/<checkpoint>_<split>/
+#  The model is rebuilt from the settings stored in the checkpoint.
+# =====================================================================
+
+# ---- Which model ----
+run_name: pilot_64x64x32_small      # must match the training run folder in outputs/
+output_dir: outputs
+checkpoint: best                  # best | latest | step_001000 ...
+use_ema: true                     # EMA weights (smoother samples)
+
+# ---- Which data ----
+split: val                        # val | test  (never evaluate on train)
+max_patches: 8                    # 0 = all patches of the split
+
+# ---- Generation ----
+seed: 123                         # same seed -> same samples
+jump_length: 5                    # RePaint back-and-forth settings
+jump_n_sample: 2                  # (higher = better blending, slower)
+amp: true
+vessel_hu: 200                    # voxels brighter than this count as "filled" in the mask check
+
+# ---- What to run ----
+plot_curves: true                 # 1. train / val loss curves
+rebuild: true                     # 2. erase each real aneurysm and regenerate it
+new_shapes: true                  # 3. grow the mask and generate a bigger aneurysm
+grow_voxels: 2
+histogram_control: true           # 4. same patch with low / medium / high contrast
+hist_patches: 2
+copy_check: true                  # 5. is a generated aneurysm too close to a training one?
+full_scan: true                   # 6. paste one result back into its CT scan (saved as NIfTI)
+full_scan_patch: null             # patch_id, or null = first evaluated patch

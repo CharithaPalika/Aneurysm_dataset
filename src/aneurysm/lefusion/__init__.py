@@ -4,8 +4,11 @@ The network and diffusion code are imported unchanged from the cloned
 repository in LeFusion/LeFusion/ddpm. Only data handling, the training
 loop and generation post-processing are ours.
 """
-from .config import TrainConfig, load_train_config
+from .config import EvalConfig, TrainConfig, load_eval_config, load_train_config
+from .evaluate import evaluate_run
 from .model import build_diffusion
+from .sample import generate, load_trained_model
 from .train import train
 
-__all__ = ["TrainConfig", "load_train_config", "build_diffusion", "train"]
+__all__ = ["TrainConfig", "load_train_config", "EvalConfig", "load_eval_config",
+           "build_diffusion", "train", "evaluate_run", "load_trained_model", "generate"]

@@ -79,3 +79,54 @@ def load_train_config(path: str | Path | None = None, overrides: dict | None = N
     cfg = TrainConfig(**values)
     cfg.validate()
     return cfg
+
+
+# ======================================================================
+# Evaluation settings (configs/lefusion_eval.yaml)
+# ======================================================================
+@dataclass
+class EvalConfig:
+    # ---- which model ----
+    run_name: str = "pilot"
+    output_dir: str = "outputs"
+    checkpoint: str = "best"              # best | latest | step_001000 ...
+    use_ema: bool = True                  # EMA weights (smoother samples)
+
+    # ---- which data ----
+    split: str = "val"                    # val | test
+    max_patches: int = 8                  # patches to evaluate (0 = all)
+
+    # ---- generation ----
+    seed: int = 123
+    jump_length: int = 5                  # RePaint settings (LeFusion script: 5 / 5)
+    jump_n_sample: int = 2
+    amp: bool = True
+    vessel_hu: float = 200.0              # "bright" threshold for the mask-fill check
+
+    # ---- what to run ----
+    plot_curves: bool = True
+    rebuild: bool = True
+    new_shapes: bool = True
+    grow_voxels: int = 2
+    histogram_control: bool = True
+    hist_patches: int = 2
+    copy_check: bool = True
+    full_scan: bool = True
+    full_scan_patch: str | None = None    # patch_id, or null = first evaluated patch
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def load_eval_config(path: str | Path | None = None, overrides: dict | None = None,
+                     project_root: str | Path | None = None) -> EvalConfig:
+    """Read configs/lefusion_eval.yaml, apply `overrides`, check for typos."""
+    root = Path(project_root).resolve() if project_root else find_project_root()
+    path = Path(path) if path else root / "configs" / "lefusion_eval.yaml"
+    values = read_yaml(path)
+    values.update(overrides or {})
+    check_keys(values, EvalConfig, path.name)
+    cfg = EvalConfig(**values)
+    if cfg.split not in ("train", "val", "test"):
+        raise ValueError("split must be train, val or test")
+    return cfg
