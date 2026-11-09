@@ -130,3 +130,61 @@ def load_eval_config(path: str | Path | None = None, overrides: dict | None = No
     if cfg.split not in ("train", "val", "test"):
         raise ValueError("split must be train, val or test")
     return cfg
+
+
+# ======================================================================
+# Background / mask test settings (configs/lefusion_eval_b.yaml, 03b notebook)
+# ======================================================================
+BACKGROUND_TEST_IDS = (1, 2, 3, 4)
+
+
+@dataclass
+class BackgroundEvalConfig:
+    # ---- which model ----
+    run_name: str = "pilot"
+    output_dir: str = "outputs"
+    checkpoint: str = "best"              # best | latest | step_001000 ...
+    use_ema: bool = True
+
+    # ---- which data ----
+    split: str = "val"                    # val | test
+    max_patches: int = 8                  # patches to evaluate (0 = all)
+
+    # ---- generation ----
+    seed: int = 123                       # same seed for every test -> fair comparison
+    jump_length: int = 5
+    jump_n_sample: int = 2
+    amp: bool = True
+    vessel_hu: float = 200.0              # "bright" threshold (vessel / aneurysm)
+
+    # ---- dilated mask + pseudo-healthy patch ----
+    dilate_voxels: int = 2                # rim removed and redrawn around the aneurysm
+    tissue_ring_voxels: int = 4           # ring around the rim used for the fill value
+    noise_blur_sigma: float = 0.7         # voxels; makes the fill noise grainy like CT
+
+    # ---- which tests (order is kept) ----
+    # 1 noisy real + actual mask        2 noisy real + dilated mask
+    # 3 noisy pseudo-healthy + actual   4 noisy pseudo-healthy + dilated mask
+    tests: list = field(default_factory=lambda: [1, 2, 3, 4])
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def load_background_eval_config(path: str | Path | None = None, overrides: dict | None = None,
+                                project_root: str | Path | None = None) -> BackgroundEvalConfig:
+    """Read configs/lefusion_eval_b.yaml, apply `overrides`, check for typos."""
+    root = Path(project_root).resolve() if project_root else find_project_root()
+    path = Path(path) if path else root / "configs" / "lefusion_eval_b.yaml"
+    values = read_yaml(path)
+    values.update(overrides or {})
+    check_keys(values, BackgroundEvalConfig, path.name)
+    cfg = BackgroundEvalConfig(**values)
+    if cfg.split not in ("train", "val", "test"):
+        raise ValueError("split must be train, val or test")
+    bad = [t for t in cfg.tests if t not in BACKGROUND_TEST_IDS]
+    if bad or not cfg.tests:
+        raise ValueError(f"tests must be a non-empty list from {list(BACKGROUND_TEST_IDS)}, got {cfg.tests}")
+    if cfg.dilate_voxels < 1:
+        raise ValueError("dilate_voxels must be >= 1")
+    return cfg

@@ -6,13 +6,21 @@ Usage (see 03_eval_lefusion.ipynb):
 Tasks (each can be switched off in configs/lefusion_eval.yaml)
 ----------------------------------------------------------------
 1. plot_curves        train and val loss from metrics.csv
-2. rebuild            erase each real aneurysm and regenerate it with its own mask + histogram
+2. rebuild            generate each aneurysm from noise inside its own mask, with its own histogram
 3. new_shapes         grow the mask by `grow_voxels` and generate a bigger aneurysm
 4. histogram_control  same patch + mask with low / medium / high contrast histograms
 5. copy_check         is a generated aneurysm too similar to a training patch?
 6. full_scan          paste one generated patch back into its CT scan (NIfTI + 3-plane figure)
 
 Everything is saved to  outputs/<run_name>/eval/<checkpoint>_<split>/  and shown inline.
+
+Background / mask tests (see 03b_eval_lefusion.ipynb):
+    results = evaluate_backgrounds(cfg)
+1. noisy real          + actual mask
+2. noisy real          + dilated mask
+3. noisy pseudo-healthy + actual mask
+4. noisy pseudo-healthy + dilated mask
+Saved to  outputs/<run_name>/eval_b/<checkpoint>_<split>/
 """
 from __future__ import annotations
 
@@ -22,13 +30,15 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+from scipy import ndimage
 
 from ..config import find_project_root
 from ..data.datasets import AneurysmPatchDataset
 from ..data.pipeline import prepare_data
 from ..data.volume import load_canonical
 from ..env import get_device
-from .config import EvalConfig
+from .config import BackgroundEvalConfig, EvalConfig
+from .pseudo_healthy import ball, dilate, make_pseudo_healthy
 from .sample import (fill_ratio, generate, grow_mask, hu_to_norm, load_trained_model,
                      model_patch_affine, norm_to_hu, paste_patch_into_volume, plot_rows)
 
@@ -64,6 +74,26 @@ def _patch_stats(real: np.ndarray, gen: np.ndarray, mask: np.ndarray, cfg, thr_n
 
 def _say(msg: str) -> None:
     print(msg, flush=True)
+
+
+def _load_run(cfg, root: Path, device) -> dict:
+    """Trained model + the evaluation patches of `cfg.split` (used by both entry points).
+
+    The model and data settings come from the checkpoint, so they always match the weights.
+    """
+    run_dir = root / cfg.output_dir / cfg.run_name
+    diffusion, data_cfg, train_cfg, info = load_trained_model(run_dir, cfg.checkpoint, device, cfg.use_ema, root)
+    _say(f"Model: {info['path'].relative_to(root).as_posix()} | step {info['step']} | "
+         f"{info['weights']} weights | best val loss {info['best_val']:.4f} | device {device}")
+    data = prepare_data(data_cfg, verbose=False)
+    ds = AneurysmPatchDataset(data["index"], data_cfg, cfg.split, augment=False)
+    if len(ds) == 0:
+        raise RuntimeError(f"No patches in split '{cfg.split}'.")
+    n = len(ds) if cfg.max_patches <= 0 else min(cfg.max_patches, len(ds))
+    gen_kw = dict(timesteps=train_cfg.timesteps, jump_length=cfg.jump_length,
+                  jump_n_sample=cfg.jump_n_sample, amp=cfg.amp)
+    return {"run_dir": run_dir, "diffusion": diffusion, "data_cfg": data_cfg, "data": data,
+            "items": [ds[i] for i in range(n)], "n_total": len(ds), "gen_kw": gen_kw}
 
 
 # ======================================================================
@@ -163,28 +193,18 @@ def evaluate_run(eval_cfg: EvalConfig, project_root: Path | None = None, show: b
     import nibabel as nib
 
     root = Path(project_root or find_project_root())
-    run_dir = root / eval_cfg.output_dir / eval_cfg.run_name
-    out_dir = run_dir / "eval" / f"{eval_cfg.checkpoint}_{eval_cfg.split}"
-    out_dir.mkdir(parents=True, exist_ok=True)
     device = get_device()
-    results: dict = {"out_dir": out_dir}
 
     # ---- model + data (settings come from the checkpoint) ----
-    diffusion, data_cfg, train_cfg, info = load_trained_model(run_dir, eval_cfg.checkpoint, device,
-                                                              eval_cfg.use_ema, root)
-    _say(f"Model: {info['path'].relative_to(root).as_posix()} | step {info['step']} | "
-         f"{info['weights']} weights | best val loss {info['best_val']:.4f} | device {device}")
-    data = prepare_data(data_cfg, verbose=False)
-    index = data["index"]
-    ds = AneurysmPatchDataset(index, data_cfg, eval_cfg.split, augment=False)
-    if len(ds) == 0:
-        raise RuntimeError(f"No patches in split '{eval_cfg.split}'.")
-    n = len(ds) if eval_cfg.max_patches <= 0 else min(eval_cfg.max_patches, len(ds))
-    items = [ds[i] for i in range(n)]
+    run = _load_run(eval_cfg, root, device)
+    run_dir, diffusion, data_cfg, data = run["run_dir"], run["diffusion"], run["data_cfg"], run["data"]
+    items, gen_kw, index = run["items"], run["gen_kw"], data["index"]
+    n = len(items)
+    out_dir = run_dir / "eval" / f"{eval_cfg.checkpoint}_{eval_cfg.split}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    results: dict = {"out_dir": out_dir}
     thr = float(hu_to_norm(eval_cfg.vessel_hu, data_cfg))
-    gen_kw = dict(timesteps=train_cfg.timesteps, jump_length=eval_cfg.jump_length,
-                  jump_n_sample=eval_cfg.jump_n_sample, amp=eval_cfg.amp)
-    _say(f"Split '{eval_cfg.split}': evaluating {n} of {len(ds)} patches | outputs: "
+    _say(f"Split '{eval_cfg.split}': evaluating {n} of {run['n_total']} patches | outputs: "
          f"{out_dir.relative_to(root).as_posix()}\n")
 
     # ---- 1. curves ----
@@ -195,7 +215,7 @@ def evaluate_run(eval_cfg: EvalConfig, project_root: Path | None = None, show: b
     # ---- 2. rebuild ----
     rebuilt: dict[str, np.ndarray] = {}
     if eval_cfg.rebuild:
-        _say("2) Rebuild: erase each real aneurysm and regenerate it")
+        _say("2) Rebuild: generate each aneurysm from noise inside its mask (real voxels inside are not used)")
         rows, stats = [], []
         for k, it in enumerate(items):
             t0 = time.time()
@@ -315,5 +335,157 @@ def evaluate_run(eval_cfg: EvalConfig, project_root: Path | None = None, show: b
     if "copy_check" in results:
         _say(f"   patches that look copied: {int(results['copy_check'].looks_copied.sum())} of "
              f"{len(results['copy_check'])}")
+    _say(f"\nAll results in {out_dir.relative_to(root).as_posix()}/")
+    return results
+
+
+# ======================================================================
+# background / mask tests  (03b_eval_lefusion.ipynb)
+# ======================================================================
+#  id: (file name, title, background, generation mask)
+BACKGROUND_TESTS = {
+    1: ("1_real_actual", "noisy real + actual mask", "real", "actual"),
+    2: ("2_real_dilated", "noisy real + dilated mask", "real", "dilated"),
+    3: ("3_pseudo_actual", "noisy pseudo-healthy + actual mask", "pseudo", "actual"),
+    4: ("4_pseudo_dilated", "noisy pseudo-healthy + dilated mask", "pseudo", "dilated"),
+}
+
+
+def _edge_step_hu(img: np.ndarray, mask: np.ndarray, cfg) -> float:
+    """Mean HU on the inner border of `mask` minus mean HU just outside it.
+
+    A real aneurysm has a blurred edge (moderate step). A generated aneurysm that
+    stops sharply at the mask (cut-out look) gives a clearly bigger step.
+    """
+    m = mask > 0
+    inner = m & ~ndimage.binary_erosion(m, structure=ball(1))
+    outer = dilate(m, 1) & ~m
+    if not inner.any() or not outer.any():
+        return float("nan")
+    return float(norm_to_hu(img[inner].mean(), cfg) - norm_to_hu(img[outer].mean(), cfg))
+
+
+def _prepare_background_cases(items: list[dict], cfg: BackgroundEvalConfig, data_cfg) -> list[dict]:
+    """For every patch: real image, pseudo-healthy image, actual mask, dilated mask, histogram."""
+    vessel_norm = float(hu_to_norm(cfg.vessel_hu, data_cfg))
+    cases = []
+    for k, it in enumerate(items):
+        real = it["image"][0].numpy()
+        actual = it["center_mask"][0].numpy()
+        ph = make_pseudo_healthy(real, actual, it["mask"][0].numpy(), cfg.dilate_voxels, vessel_norm,
+                                 cfg.tissue_ring_voxels, cfg.noise_blur_sigma, seed=cfg.seed + k)
+        dilated = ph["region"]
+        cases.append({
+            "patch_id": it["patch_id"], "real": real, "pseudo": ph["image"],
+            "actual": actual, "dilated": dilated, "hist": it["hist"],
+            "tissue_hu": float(norm_to_hu(ph["tissue_norm"], data_cfg)),
+            "tissue_std_hu": float(ph["tissue_std"] * (data_cfg.hu_max - data_cfg.hu_min) / 2),
+            "parent_voxels": int(ph["parent"].sum()),
+            "left_bright": float((ph["image"][dilated > 0] > vessel_norm).mean()),
+        })
+    return cases
+
+
+def _check_pseudo_healthy(cases: list[dict], out_path: Path, show: bool) -> pd.DataFrame:
+    """Print + plot the pseudo-healthy patches (check them before trusting tests 3 and 4)."""
+    stats, rows = [], []
+    for c in cases:
+        stats.append({"patch_id": c["patch_id"], "actual_voxels": int(c["actual"].sum()),
+                      "dilated_voxels": int(c["dilated"].sum()), "parent_vessel_voxels_kept": c["parent_voxels"],
+                      "fill_hu": c["tissue_hu"], "noise_std_hu": c["tissue_std_hu"],
+                      "still_bright_in_dilated": c["left_bright"]})
+        rows.append({"real": c["real"], "gen": c["pseudo"], "mask": c["actual"], "outer_mask": c["dilated"],
+                     "label": f"{c['patch_id']} fill {c['tissue_hu']:.0f} HU"})
+        _say(f"   {c['patch_id']}: actual {stats[-1]['actual_voxels']} -> dilated {stats[-1]['dilated_voxels']} "
+             f"voxels | parent vessel kept {c['parent_voxels']} | fill {c['tissue_hu']:.0f} "
+             f"+- {c['tissue_std_hu']:.0f} HU | still bright {c['left_bright']:.2f}")
+    plot_rows(rows, out_path, show, names={"generated": "pseudo-healthy"},
+              title="Pseudo-healthy check (yellow = actual mask, red = dilated mask = removed area)")
+    return pd.DataFrame(stats)
+
+
+def _run_background_test(test_id: int, cases: list[dict], diffusion, data_cfg, cfg: BackgroundEvalConfig,
+                         gen_kw: dict, device, thr: float) -> tuple[pd.DataFrame, list[dict]]:
+    """Generate every case with one background + mask combination; stats inside the actual mask."""
+    _, title, bg_key, mask_key = BACKGROUND_TESTS[test_id]
+    to_t = lambda a: torch.from_numpy(np.ascontiguousarray(a, dtype=np.float32))[None, None].to(device)
+    stats, rows = [], []
+    for k, c in enumerate(cases):
+        t0 = time.time()
+        gen_mask = c[mask_key]
+        gen = generate(diffusion, to_t(c[bg_key]), to_t(gen_mask), c["hist"][None].to(device),
+                       seed=cfg.seed + k, **gen_kw)[0, 0].cpu().numpy()
+        st = {"test": test_id, "name": title, "patch_id": c["patch_id"],
+              **_patch_stats(c["real"], gen, c["actual"], data_cfg, thr),
+              "gen_fill_generated_area": float((gen[gen_mask > 0] > thr).mean()),
+              "real_edge_step_hu": _edge_step_hu(c["real"], c["actual"], data_cfg),
+              "gen_edge_step_hu": _edge_step_hu(gen, c["actual"], data_cfg),
+              "seconds": time.time() - t0}
+        stats.append(st)
+        rows.append({"real": c["real"], "input": c[bg_key], "gen": gen, "mask": c["actual"],
+                     "outer_mask": c["dilated"], "label": c["patch_id"]})
+        _say(f"   {c['patch_id']}: HU in mask real {st['real_hu_mean']:.0f} / gen {st['gen_hu_mean']:.0f} | "
+             f"fill real {st['real_fill']:.2f} / gen {st['gen_fill']:.2f} | edge step real "
+             f"{st['real_edge_step_hu']:.0f} / gen {st['gen_edge_step_hu']:.0f} HU | {st['seconds']:.0f} s")
+    return pd.DataFrame(stats), rows
+
+
+def _background_summary(tables: list[pd.DataFrame]) -> pd.DataFrame:
+    """One row per test: averages over the patches."""
+    cols = ["real_hu_mean", "gen_hu_mean", "real_hu_std", "gen_hu_std", "mae_hu_inside", "real_fill",
+            "gen_fill", "gen_fill_generated_area", "real_edge_step_hu", "gen_edge_step_hu"]
+    df = pd.concat(tables, ignore_index=True)
+    summary = df.groupby(["test", "name"], sort=False)[cols].mean().reset_index()
+    return summary
+
+
+def evaluate_backgrounds(cfg: BackgroundEvalConfig, project_root: Path | None = None, show: bool = True) -> dict:
+    """Run the background / mask tests in the order of `cfg.tests`.
+
+    Same patches, same histogram and same seed in every test, so only the
+    background and the generation mask change. All numbers are measured inside
+    the actual mask and compared with the real aneurysm.
+    Returns {"out_dir", "pseudo_check", "tests": {id: table}, "summary"}.
+    """
+    root = Path(project_root or find_project_root())
+    device = get_device()
+    run = _load_run(cfg, root, device)
+    data_cfg, items = run["data_cfg"], run["items"]
+    out_dir = run["run_dir"] / "eval_b" / f"{cfg.checkpoint}_{cfg.split}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    thr = float(hu_to_norm(cfg.vessel_hu, data_cfg))
+    _say(f"Split '{cfg.split}': {len(items)} of {run['n_total']} patches | tests {cfg.tests} | "
+         f"dilated mask = actual + {cfg.dilate_voxels} voxels | outputs: {out_dir.relative_to(root).as_posix()}\n")
+
+    # ---- 0. pseudo-healthy patches (needed by tests 3 and 4, always checked) ----
+    _say(f"0) Pseudo-healthy patches: aneurysm + {cfg.dilate_voxels}-voxel rim removed, parent vessel kept")
+    cases = _prepare_background_cases(items, cfg, data_cfg)
+    results: dict = {"out_dir": out_dir, "tests": {}}
+    results["pseudo_check"] = _check_pseudo_healthy(cases, out_dir / "0_pseudo_healthy_check.png", show)
+    results["pseudo_check"].to_csv(out_dir / "0_pseudo_healthy_check.csv", index=False)
+    _say("   'still bright' should be close to 0 (aneurysm fully removed).")
+
+    # ---- 1-4. tests ----
+    for test_id in cfg.tests:
+        name, title, _, mask_key = BACKGROUND_TESTS[test_id]
+        _say(f"\n{test_id}) {title}")
+        table, rows = _run_background_test(test_id, cases, run["diffusion"], data_cfg, cfg,
+                                           run["gen_kw"], device, thr)
+        table.to_csv(out_dir / f"{name}.csv", index=False)
+        plot_rows(rows, out_dir / f"{name}.png", show,
+                  title=f"{test_id}) {title}  (yellow = actual mask, red = dilated mask; "
+                        f"generated inside the {mask_key} mask)")
+        results["tests"][test_id] = table
+
+    # ---- summary ----
+    summary = _background_summary(list(results["tests"].values()))
+    summary.to_csv(out_dir / "summary.csv", index=False)
+    results["summary"] = summary
+    _say("\nSummary (mean over patches, inside the actual mask)")
+    _say(summary.round(2).to_string(index=False))
+    _say("\nHow to read it:")
+    _say("   1 vs 2 : effect of the dilated mask on a real background")
+    _say("   1 vs 4 : 4 close to 1 -> the model does not need the real rim; it works on a healthy-looking vessel")
+    _say("   3      : gen edge step much bigger than real -> generating only inside the actual mask leaves a hard edge")
     _say(f"\nAll results in {out_dir.relative_to(root).as_posix()}/")
     return results

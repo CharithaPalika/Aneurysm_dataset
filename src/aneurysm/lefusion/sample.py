@@ -5,7 +5,7 @@ Main pieces
 load_trained_model(...)   checkpoint -> model + the configs it was trained with
 generate(...)             LeFusion inpainting (RePaint loop) inside a mask, real background kept
 paste_patch_into_volume() put a generated patch back into the full CT scan
-plot_rows(...)            real | generated | difference figure
+plot_rows(...)            real | (input) | generated | difference figure
 """
 from __future__ import annotations
 
@@ -116,11 +116,15 @@ def generate(diffusion, image: torch.Tensor, mask: torch.Tensor, hist: torch.Ten
 
 
 def grow_mask(mask: torch.Tensor, voxels: int) -> torch.Tensor:
-    """Grow a (B, 1, D, H, W) mask by `voxels` in every direction (3D max-pooling)."""
+    """Grow a (B, 1, D, H, W) mask by `voxels` with a round (ball) kernel, so corners stay round."""
     if voxels <= 0:
         return mask
-    k = 2 * voxels + 1
-    return torch.nn.functional.max_pool3d(mask, kernel_size=k, stride=1, padding=voxels)
+    r = int(voxels)
+    ax = torch.arange(-r, r + 1, device=mask.device, dtype=torch.float32)
+    zz, yy, xx = torch.meshgrid(ax, ax, ax, indexing="ij")
+    kernel = ((zz ** 2 + yy ** 2 + xx ** 2) <= r * r).float()[None, None]
+    hits = torch.nn.functional.conv3d((mask > 0).float(), kernel, padding=r)
+    return (hits > 0.5).to(mask.dtype)
 
 
 def fill_ratio(gen: torch.Tensor, mask: torch.Tensor, threshold_norm: float) -> float:
@@ -172,25 +176,49 @@ def paste_patch_into_volume(volume_hu: np.ndarray, volume_affine: np.ndarray,
 # ----------------------------------------------------------------------
 # figures
 # ----------------------------------------------------------------------
-def plot_rows(rows: list[dict], out_path: Path | None = None, show: bool = False, title: str = ""):
-    """One row per sample: real | generated | |difference|, middle slice through the mask.
+def _contour(ax, m2d: np.ndarray, color: str) -> None:
+    if m2d.any():
+        ax.contour(m2d, levels=[0.5], colors=color, linewidths=0.8, origin="lower")
 
-    rows: dicts with 'real', 'gen', 'mask' (D, H, W numpy, [-1, 1]) and 'label' (str).
+
+def plot_rows(rows: list[dict], out_path: Path | None = None, show: bool = False, title: str = "",
+              names: dict | None = None):
+    """One row per sample: real | (input) | generated | |difference|, middle slice through the mask.
+
+    rows: dicts with
+        'real', 'gen', 'mask'  (D, H, W) numpy, [-1, 1] / 0-1
+        'label'                str
+        'input'      optional  background given to the model -> extra panel
+        'outer_mask' optional  larger mask: then 'mask' is drawn yellow and 'outer_mask' red
+                               (without it, 'mask' is drawn red)
+    names: rename panels, e.g. {"generated": "pseudo-healthy"}
     """
     import matplotlib.pyplot as plt
 
-    n = len(rows)
-    fig, axs = plt.subplots(n, 3, figsize=(9, 3 * n), squeeze=False)
+    names = {"real": "real", "input": "input", "generated": "generated", "difference": "|difference|",
+             **(names or {})}
+    with_input = any("input" in r for r in rows)
+    n, cols = len(rows), (4 if with_input else 3)
+    fig, axs = plt.subplots(n, cols, figsize=(3 * cols, 3 * n), squeeze=False)
     for k, r in enumerate(rows):
-        m = r["mask"]
-        z = int(np.argmax(m.sum(axis=(1, 2)))) if m.any() else m.shape[0] // 2
-        panels = [(r["real"], "real", "gray", -1), (r["gen"], "generated", "gray", -1),
-                  (np.abs(r["gen"] - r["real"]), "|difference|", "magma", 0)]
+        m, outer = r["mask"], r.get("outer_mask")
+        ref = outer if outer is not None else m
+        z = int(np.argmax(ref.sum(axis=(1, 2)))) if ref.any() else ref.shape[0] // 2
+        panels = [(r["real"], names["real"], "gray", -1)]
+        if with_input:
+            panels.append((r.get("input", r["real"]), names["input"], "gray", -1))
+        panels += [(r["gen"], names["generated"], "gray", -1),
+                   (np.abs(r["gen"] - r["real"]), names["difference"], "magma", 0)]
         for j, (img, name, cmap, vmin) in enumerate(panels):
-            axs[k, j].imshow(img[z], cmap=cmap, vmin=vmin, vmax=1, origin="lower")
-            axs[k, j].contour(m[z], levels=[0.5], colors="r", linewidths=0.8, origin="lower")
-            axs[k, j].set_title(f"{r['label']}  {name}", fontsize=8)
-            axs[k, j].axis("off")
+            ax = axs[k, j]
+            ax.imshow(img[z], cmap=cmap, vmin=vmin, vmax=1, origin="lower")
+            if outer is None:
+                _contour(ax, m[z], "r")
+            else:
+                _contour(ax, outer[z], "r")
+                _contour(ax, m[z], "y")
+            ax.set_title(f"{r['label']}  {name}", fontsize=8)
+            ax.axis("off")
     if title:
         fig.suptitle(title, fontsize=10)
     plt.tight_layout()
