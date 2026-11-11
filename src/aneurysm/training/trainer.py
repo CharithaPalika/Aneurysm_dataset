@@ -1,7 +1,8 @@
 """Training loop for LeFusion on our aneurysm patches.
 
-Usage (see 02_train_lefusion.ipynb):
+Usage:
     result = train(data_cfg, train_cfg)
+    (02_train_lefusion.ipynb, or from a terminal: python scripts/run_train.py)
 
 Steps
 -----
@@ -25,7 +26,7 @@ Everything is written to  <output_dir>/<run_name>/ :
 
 A checkpoint holds: network weights ("model"), EMA weights ("ema"), optimiser,
 AMP scaler, random-number states, step, best val loss and both configs.
-Stop any time with "Interrupt kernel": latest.pt is saved, and the next call
+Stop any time with "Interrupt kernel" (notebook) or Ctrl+C (terminal): latest.pt is saved, and the next call
 with resume=True continues from it.
 """
 from __future__ import annotations
@@ -42,13 +43,14 @@ import numpy as np
 import torch
 import yaml
 
-from ..config import DataConfig
+from ..config import DataConfig, RunPaths, TrainConfig
 from ..data.datasets import make_dataloaders
 from ..data.pipeline import prepare_data
-from ..env import default_num_workers, describe_environment, get_device
-from .config import TrainConfig
+from ..data.intensity import norm_to_hu
+from ..utils.env import default_num_workers, describe_environment, get_device
+from ..utils.plotting import plot_rows
 from .model import build_diffusion, count_parameters
-from .sample import generate, norm_to_hu, plot_rows
+from .sampling import generate
 
 
 # ======================================================================
@@ -89,8 +91,9 @@ class RunLogger:
     """print() that also appends to train_log.txt, plus a metrics.csv writer."""
 
     def __init__(self, run_dir: Path):
-        self.log_path = run_dir / "train_log.txt"
-        self.metrics_path = run_dir / "metrics.csv"
+        paths = RunPaths(run_dir)
+        self.log_path = paths.log
+        self.metrics_path = paths.metrics
         new = not self.metrics_path.exists()
         self._mfile = open(self.metrics_path, "a", newline="", encoding="utf-8")
         self._writer = csv.DictWriter(self._mfile, fieldnames=["step", "kind", "name", "value"])
@@ -222,7 +225,7 @@ def save_samples(ema_diffusion, items: list[dict], data_cfg: DataConfig, train_c
                  device, out_path: Path, amp: bool, seed: int) -> list[dict]:
     """Rebuild the centred aneurysm of a few val patches and save one PNG (training preview).
 
-    Uses the same generation code as the evaluation notebook (lefusion/sample.py).
+    Uses the same generation code as the evaluation (training/sampling.py).
     Returns mean HU inside the mask (real vs generated) for each sample.
     """
     gt = torch.stack([it["image"] for it in items]).to(device)
@@ -257,8 +260,8 @@ def train(data_cfg: DataConfig, train_cfg: TrainConfig) -> dict:
     use_amp = bool(train_cfg.amp and device.type == "cuda")
 
     # ---- run folder: <output_dir>/<run_name>/ ----
-    run_dir = data_cfg.project_root / train_cfg.output_dir / train_cfg.run_name
-    ckpt_dir, sample_dir = run_dir / "checkpoints", run_dir / "samples"
+    paths = RunPaths(data_cfg.project_root / train_cfg.output_dir / train_cfg.run_name)
+    run_dir, ckpt_dir, sample_dir = paths.root, paths.checkpoints, paths.samples
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     sample_dir.mkdir(parents=True, exist_ok=True)
     logger = RunLogger(run_dir)
@@ -276,7 +279,7 @@ def train(data_cfg: DataConfig, train_cfg: TrainConfig) -> dict:
     loaders = make_dataloaders(data["index"], data_cfg, batch_size=train_cfg.batch_size,
                                num_workers=workers, seed=train_cfg.seed)
     if "train" not in loaders:
-        raise RuntimeError("No training patches found. Check Dataset/ and run 01_dataset.ipynb.")
+        raise RuntimeError("No training patches found. Check the data paths in configs/data/data.yaml.")
     val_loader = loaders.get("val")
     sample_items = []
     if val_loader is not None and train_cfg.sample_every > 0:
@@ -295,7 +298,7 @@ def train(data_cfg: DataConfig, train_cfg: TrainConfig) -> dict:
 
     # ---- resume ----
     step, best_val = 0, float("inf")
-    latest = ckpt_dir / "latest.pt"
+    latest = paths.checkpoint("latest")
     if train_cfg.resume and latest.exists():
         ck = torch.load(latest, map_location=device)
         # the network shape must be the same as in the checkpoint, otherwise the weights do not fit
@@ -310,7 +313,7 @@ def train(data_cfg: DataConfig, train_cfg: TrainConfig) -> dict:
                 details += (", " if details else "") + f"patches: checkpoint {ck.get('patch_tag')} vs now {data_cfg.patch_tag}"
             raise ValueError(
                 f"Run '{train_cfg.run_name}' already has a checkpoint made with different settings ({details}). "
-                f"Use a new run_name in TRAIN_OVERRIDES to start a fresh run with these settings."
+                f"Use a new run_name (TRAIN_OVERRIDES or --set run_name=...) to start a fresh run with these settings."
             )
         diffusion.denoise_fn.load_state_dict(ck["model"])
         ema.model.denoise_fn.load_state_dict(ck["ema"])
@@ -327,8 +330,8 @@ def train(data_cfg: DataConfig, train_cfg: TrainConfig) -> dict:
             f"or set a new run_name to start a fresh run (nothing was overwritten).")
 
     # settings used for this run (a resumed run gets its own file, the first one is kept)
-    cfg_name = "config.yaml" if step == 0 else f"config_resume_step{step:06d}.yaml"
-    with open(run_dir / cfg_name, "w", encoding="utf-8") as f:
+    cfg_path = paths.config if step == 0 else run_dir / f"config_resume_step{step:06d}.yaml"
+    with open(cfg_path, "w", encoding="utf-8") as f:
         yaml.safe_dump({"data": _plain(data_cfg.to_dict()), "train": train_cfg.to_dict()}, f, sort_keys=False)
 
     if step >= train_cfg.max_steps:

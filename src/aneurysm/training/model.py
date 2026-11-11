@@ -7,15 +7,14 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from ..config import DataConfig
-from .config import TrainConfig
+from ..config import DataConfig, TrainConfig
+from ..config.paths import LEFUSION_CODE_DIR
 
-LEFUSION_SUBDIR = Path("LeFusion") / "LeFusion"     # folder that contains ddpm/
 
 
 def add_lefusion_to_path(project_root: Path) -> Path:
     """Make `import ddpm` find the cloned LeFusion code."""
-    code_dir = (Path(project_root) / LEFUSION_SUBDIR).resolve()
+    code_dir = (Path(project_root) / LEFUSION_CODE_DIR).resolve()
     if not (code_dir / "ddpm" / "diffusion.py").exists():
         raise FileNotFoundError(f"LeFusion code not found at {code_dir} (expected ddpm/diffusion.py)")
     if str(code_dir) not in sys.path:

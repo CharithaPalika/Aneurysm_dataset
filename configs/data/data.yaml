@@ -1,8 +1,9 @@
 # =====================================================================
-#  Dataset settings  (read by src/aneurysm/config.py -> load_data_config)
+#  Dataset settings  (read by src/aneurysm/config/data.py -> load_data_config)
 #  Paths are relative to the project folder.
 #  After changing anything under "Patches" or "Preprocessing",
-#  re-cut the patches once: build_patch_index(..., overwrite=True)
+#  patches for the new setting are cut automatically into their own folder.
+#  Force a re-cut: python scripts/run_prepare_data.py --overwrite
 # =====================================================================
 
 # ---- Raw data ----

@@ -119,3 +119,43 @@ def extract_patch(image: np.ndarray, mask: np.ndarray, affine: np.ndarray, spaci
     return (np.round(img_patch).astype(np.int16),
             np.rint(msk_patch).astype(np.uint8),
             patch_affine)
+
+
+# ----------------------------------------------------------------------
+# generated patch -> back into the full scan
+# ----------------------------------------------------------------------
+def model_patch_affine(stored_affine: np.ndarray, margin: int) -> np.ndarray:
+    """Affine of the centre-cropped model patch (x, y, z voxel -> world mm)."""
+    shift = np.eye(4)
+    shift[:3, 3] = margin
+    return stored_affine @ shift
+
+
+def paste_patch_into_volume(volume_hu: np.ndarray, volume_affine: np.ndarray,
+                            patch_hu: np.ndarray, patch_mask: np.ndarray, patch_affine: np.ndarray,
+                            blend_sigma_vox: float = 1.0) -> np.ndarray:
+    """Paste a generated patch (x, y, z order, HU) back into the full scan (RAS, native grid).
+
+    Only voxels near the mask change: weight = blurred, slightly grown mask, so the
+    edge is soft. Returns a new int16 volume.
+    """
+    weight = ndimage.gaussian_filter(ndimage.binary_dilation(patch_mask > 0, iterations=2).astype(np.float32),
+                                     blend_sigma_vox)
+    # native voxels covered by the patch: map the patch corners into the volume
+    corners = np.array([[i, j, k, 1] for i in (0, patch_hu.shape[0] - 1)
+                        for j in (0, patch_hu.shape[1] - 1) for k in (0, patch_hu.shape[2] - 1)]).T
+    vox = np.linalg.inv(volume_affine) @ patch_affine @ corners
+    lo = np.maximum(np.floor(vox[:3].min(1)).astype(int), 0)
+    hi = np.minimum(np.ceil(vox[:3].max(1)).astype(int) + 1, np.array(volume_hu.shape))
+
+    grid = np.stack(np.meshgrid(*[np.arange(a, b) for a, b in zip(lo, hi)], indexing="ij"))
+    pts = np.concatenate([grid.reshape(3, -1), np.ones((1, grid[0].size))])
+    p = (np.linalg.inv(patch_affine) @ volume_affine @ pts)[:3]          # patch coordinates
+
+    w = ndimage.map_coordinates(weight, p, order=1, mode="constant", cval=0).reshape(grid.shape[1:])
+    g = ndimage.map_coordinates(patch_hu.astype(np.float32), p, order=1, mode="nearest").reshape(grid.shape[1:])
+
+    out = volume_hu.copy()
+    region = tuple(slice(a, b) for a, b in zip(lo, hi))
+    out[region] = np.round(w * g + (1 - w) * out[region].astype(np.float32)).astype(np.int16)
+    return out

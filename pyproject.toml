@@ -1,0 +1,15 @@
+# Makes src/aneurysm importable from anywhere in the environment:
+#     pip install -e .
+# Dependencies are installed from requirements.txt (PyTorch needs the CUDA index URL there).
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aneurysm"
+version = "0.1.0"
+description = "Synthetic intracranial aneurysm CTA patches with LeFusion"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["src"]

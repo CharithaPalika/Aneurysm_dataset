@@ -1,7 +1,8 @@
 # =====================================================================
-#  LeFusion training settings (read by src/aneurysm/lefusion/config.py)
-#  Patch size comes from configs/data.yaml (patch_size, patch_depth).
-#  Any value can be overridden in 02_train_lefusion.ipynb (TRAIN_OVERRIDES).
+#  LeFusion training settings (read by src/aneurysm/config/train.py)
+#  Patch size comes from configs/data/data.yaml (patch_size, patch_depth).
+#  Override values in 02_train_lefusion.ipynb (TRAIN_OVERRIDES) or
+#  python scripts/run_train.py --set key=value
 # =====================================================================
 
 # ---- Run ----

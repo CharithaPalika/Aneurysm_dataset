@@ -1,7 +1,6 @@
 """Pseudo-healthy patches: remove an aneurysm (and its blurred rim) from a real patch.
 
-Used by evaluate_backgrounds() (03b_eval_lefusion.ipynb) to test generation on a
-vessel that has no aneurysm.
+Used by the evaluation (cases 3 and 4) to test generation on a vessel that has no aneurysm.
 
 One patch, model values in [-1, 1], axes (D, H, W):
 

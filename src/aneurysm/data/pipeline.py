@@ -1,6 +1,6 @@
 """One call that gets the data ready: catalog -> split -> cached patches.
 
-Used by the training notebook so it does not repeat the dataset notebook.
+Used by training, evaluation and scripts/run_prepare_data.py.
 Patches are cached per patch setting (see DataConfig.patch_dir), so this is
 fast after the first run and re-cuts automatically when data.yaml changes.
 """
@@ -14,11 +14,14 @@ from .patches import build_patch_index
 from .splits import load_or_create_splits
 
 
-def prepare_data(cfg: DataConfig, n_threads: int = 2, verbose: bool = True) -> dict:
-    """Returns {'catalog', 'splits', 'index'} (pandas DataFrames)."""
+def prepare_data(cfg: DataConfig, n_threads: int = 2, verbose: bool = True, overwrite: bool = False) -> dict:
+    """Returns {'catalog', 'splits', 'index'} (pandas DataFrames).
+
+    overwrite=True re-cuts the patches of this setting even if they already exist.
+    """
     catalog = build_catalog(cfg)
     splits = load_or_create_splits(catalog, cfg)
-    index = build_patch_index(catalog, splits, cfg, overwrite=False, n_threads=n_threads)
+    index = build_patch_index(catalog, splits, cfg, overwrite=overwrite, n_threads=n_threads)
 
     if verbose:
         counts = index.groupby("split").agg(patches=("patch_id", "size"), cases=("case_id", "nunique"))

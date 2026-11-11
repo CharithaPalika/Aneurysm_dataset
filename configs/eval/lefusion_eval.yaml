@@ -1,0 +1,44 @@
+# =====================================================================
+#  LeFusion evaluation settings (read by src/aneurysm/config/eval.py)
+#  Results go to <run folder>/eval/<checkpoint>_<split>/ (with a copy of this file).
+#  Model and data settings are read from the checkpoint, so they match the trained run.
+#
+#  actual mask    = the annotated aneurysm                     (yellow in figures)
+#  dilated mask   = actual mask + dilate_voxels, without the parent vessel   (red)
+#  pseudo-healthy = aneurysm + rim removed, parent vessel kept, filled with tissue
+# =====================================================================
+
+# ---- Which model ----
+run_name: pilot_64x64x32_small    # folder outputs/<run_name>/ written by training
+run_dir: null                     # or the run folder itself (wins over run_name), e.g. outputs/my_run
+output_dir: outputs
+checkpoint: best                  # best | latest | step_001000 ...
+use_ema: true                     # EMA weights (smoother samples)
+
+# ---- Which data ----
+split: val                        # val | test  (never evaluate on train)
+max_patches: 8                    # 0 = all patches of the split
+
+# ---- Generation ----
+seed: 123                         # same seed in every case -> fair comparison
+jump_length: 5                    # RePaint back-and-forth settings
+jump_n_sample: 2                  # (higher = better blending, slower)
+amp: true
+vessel_hu: 200                    # voxels brighter than this count as vessel / "filled"
+
+# ---- Dilated mask + pseudo-healthy patch (cases 2-4) ----
+dilate_voxels: 2                  # rim around the aneurysm (0.45 mm voxels -> 0.9 mm)
+tissue_ring_voxels: 4             # ring around the rim used for the fill value
+noise_blur_sigma: 0.7             # grainy fill noise like CT (0 = white noise)
+
+# ---- Checks (true / false) ----
+training_curves: true             # train / val loss curves
+case_1_real_actual: true          # noisy real          + actual mask
+case_2_real_dilated: true         # noisy real          + dilated mask
+case_3_pseudo_actual: true        # noisy pseudo-healthy + actual mask
+case_4_pseudo_dilated: true       # noisy pseudo-healthy + dilated mask
+histogram_control: true           # same patch with low / medium / high contrast
+hist_patches: 2
+copy_check: true                  # is a case-1 aneurysm too close to a training one? (needs case 1)
+full_scan: true                   # paste one case-1 result back into its CT scan (needs case 1)
+full_scan_patch: null             # patch_id, or null = first evaluated patch

@@ -1,35 +1,17 @@
-"""Project configuration.
-
-Values live in YAML files in the configs/ folder (e.g. configs/data.yaml).
-This module defines what each config contains and loads it.
-
-All paths are built from one project root, so the same code runs on macOS
-and Windows. Paths written to CSV files are stored *relative* to the
-project root (with forward slashes), so caches made on one machine can be
-copied to another.
-"""
+"""Data settings (configs/data/data.yaml): paths, split, preprocessing, patch size."""
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict, fields
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
-import yaml
+from .base import CONFIG_DIR, check_keys, find_project_root, read_yaml, resolve_path
 
-
-def find_project_root(start: Path | None = None) -> Path:
-    """Walk up from `start` until a folder containing `Dataset/` and `src/` is found."""
-    start = Path(start or Path.cwd()).resolve()
-    for folder in (start, *start.parents):
-        if (folder / "Dataset").is_dir() and (folder / "src").is_dir():
-            return folder
-    raise FileNotFoundError(
-        f"Could not find the project root (a folder with 'Dataset/' and 'src/') above {start}"
-    )
+DEFAULT_DATA_CONFIG = Path(CONFIG_DIR) / "data" / "data.yaml"
 
 
 @dataclass
 class DataConfig:
-    """Everything the data pipeline needs. Values come from configs/data.yaml;
+    """Everything the data pipeline needs. Values come from configs/data/data.yaml;
     the defaults below are only used if a key is missing from the file."""
 
     project_root: Path
@@ -120,8 +102,13 @@ class DataConfig:
 
     # ------------------------------------------------------------------
     def rel(self, path: Path) -> str:
-        """Path relative to the project root, with forward slashes (portable)."""
-        return Path(path).resolve().relative_to(self.project_root.resolve()).as_posix()
+        """Path relative to the project root, with forward slashes (portable).
+        A path outside the project (e.g. data on another drive) stays absolute."""
+        p = Path(path).resolve()
+        try:
+            return p.relative_to(self.project_root.resolve()).as_posix()
+        except ValueError:
+            return p.as_posix()
 
     def abs(self, rel_path: str) -> Path:
         """Inverse of `rel`."""
@@ -133,28 +120,15 @@ class DataConfig:
         return d
 
 
-def read_yaml(path: str | Path) -> dict:
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
-
-
-def check_keys(values: dict, cls, source: str, skip: tuple = ()) -> None:
-    """Raise if `values` has keys that are not fields of dataclass `cls` (catches typos)."""
-    allowed = {f.name for f in fields(cls)} - set(skip)
-    unknown = set(values) - allowed
-    if unknown:
-        raise KeyError(f"Unknown keys in {source}: {sorted(unknown)}. Allowed: {sorted(allowed)}")
-
-
 def load_data_config(path: str | Path | None = None, project_root: str | Path | None = None,
                      overrides: dict | None = None) -> DataConfig:
-    """Read configs/data.yaml (or `path`) into a DataConfig.
+    """Read configs/data/data.yaml (or `path`) into a DataConfig.
 
     overrides: optional dict applied on top of the file, e.g. {"patch_depth": 64}.
     Unknown keys raise an error, so typos are caught early.
     """
     root = Path(project_root).resolve() if project_root else find_project_root()
-    path = Path(path) if path else root / "configs" / "data.yaml"
+    path = resolve_path(path, root, DEFAULT_DATA_CONFIG)
     values = read_yaml(path)
     values.update(overrides or {})
     check_keys(values, DataConfig, path.name, skip=("project_root",))
