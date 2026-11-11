@@ -99,6 +99,7 @@ python scripts/run_eval.py --set run_name=pilot_64x64x32_small max_patches=4 cas
 python scripts/run_eval.py --config configs/eval/my_eval.yaml
 ```
 The model and data settings are read **from the checkpoint**, so they always match the trained run.
+**Data needed:** only `work/` (the cached patches of the trained setting, e.g. copied from the training machine). `Dataset/` is needed only for `full_scan` (skipped with a message if the scan is missing) or when the patches are not cached yet.
 If the run is not found, the error lists the runs in `outputs/`.
 
 **Checks** (each `true` / `false` in the config)
