@@ -1,0 +1,60 @@
+# =====================================================================
+#  LeFusion training settings for the cluster: 4 x A100 40 GB (read by src/aneurysm/config/train.py)
+#  Network and batch as in the LeFusion paper / repo (64 base channels, [1,2,4,8],
+#  effective batch 40, 50k steps; the README says results are good after 20k).
+#  Run:  torchrun --standalone --nproc_per_node=4 scripts/run_train.py --config configs/train/lefusion_train_a100.yaml
+#  Smoke test first: torchrun --standalone --nproc_per_node=4 scripts/run_smoke_test.py --config configs/train/lefusion_train_a100.yaml
+#  Patch size comes from configs/data/data.yaml (patch_size, patch_depth).
+#  Override values in 02_train_lefusion.ipynb (TRAIN_OVERRIDES) or
+#  python scripts/run_train.py --set key=value
+# =====================================================================
+
+# ---- Run ----
+run_name: a100_paper_64x64x32     # outputs go to <output_dir>/<run_name>/
+output_dir: outputs               # logs, metrics, samples and checkpoints of all runs
+resume: true                      # continue from <run>/checkpoints/latest.pt if it exists
+seed: 42                          # same seed + same data + same settings -> same run
+deterministic: true               # deterministic cuDNN (a bit slower, more reproducible)
+
+# ---- Data source ----
+preprocess: false                 # false: use the preprocessed work dir only (run scripts/run_preprocess.py first)
+                                  # true:  cut missing patches from Dataset/ before training
+work_dir: null                    # folder with the preprocessed data (splits/ + patches/);
+                                  # null = work_subdir in configs/data/data.yaml (default work/)
+
+# ---- Network (LeFusion Unet3D) ----
+base_channels: 64                 # paper: 64
+dim_mults: [1, 2, 4, 8]           # channels per level = base_channels * mult
+attn_heads: 8
+attn_dim_head: 32
+
+# ---- Diffusion ----
+timesteps: 300                    # LeFusion code: 300, cosine schedule
+loss_type: l1                     # l1 (LeFusion code) or l2
+
+# ---- Optimisation ----
+lr: 1.0e-4
+batch_size: 5                     # PER GPU (4 GPUs -> 20 per step, as the paper's 20)
+grad_accum: 2                     # effective batch = batch_size * grad_accum * GPUs = 40 (paper)
+max_steps: 50000                  # paper: 50k (good after 20k); about 3 days on 4 x A100
+grad_clip: 1.0                    # max gradient norm (null = off)
+amp: true                         # mixed precision (fp16) on CUDA
+num_workers: 6                    # data loader workers PER GPU (cluster: set to CPUs per GPU - 2)
+
+# ---- EMA (smoothed copy of the weights, used for samples) ----
+ema_decay: 0.995
+ema_start: 2000                   # copy weights until this step, then average
+ema_every: 10
+
+# ---- Logging, evaluation, checkpoints ----
+log_every: 50                     # print train loss every N steps
+eval_every: 1000                  # validation loss every N steps
+eval_max_batches: 50              # cap on validation batches per evaluation
+eval_timesteps: [30, 150, 270]    # fixed noise levels -> comparable val loss (must be < timesteps)
+sample_every: 5000                # save preview samples every N steps (0 = off)
+n_samples: 2                      # preview samples per check (from the val split)
+sample_jump_length: 5             # RePaint settings for previews
+sample_jump_n_sample: 2
+save_every: 1000                  # checkpoint every N steps
+keep_last: 5                      # keep the last N step_*.pt (latest.pt and best.pt always kept)
+memory_check: true                # one forward+backward first, print peak GPU memory

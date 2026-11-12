@@ -1,25 +1,21 @@
 # =====================================================================
-#  Dataset settings  (read by src/aneurysm/config/data.py -> load_data_config)
-#  Paths are relative to the project folder.
-#  After changing anything under "Patches" or "Preprocessing",
-#  patches for the new setting are cut automatically into their own folder.
-#  Force a re-cut: python scripts/run_prepare_data.py --overwrite
+#  Data settings  (read by src/aneurysm/config/data.py -> load_data_config)
+#  Which datasets are used + split, preprocessing and patch settings.
+#  Each dataset's location and folder layout: configs/data/sources/<name>.yaml
+#  Preprocess:  python scripts/run_preprocess.py   (--overwrite to re-cut)
+#  Changing "Preprocessing" or "Patches" creates a new patch folder; old ones are kept.
 # =====================================================================
 
-# ---- Raw data ----
-scans_subdir: Dataset/CTA_scans                        # holds internal_Tr01, internal_Tr02, ...
-scan_folder_glob: "internal_*"                         # which sub-folders of CTA_scans to read
-masks_subdir: Dataset/Annotations/internal_annotation
-instances_csv: Dataset/internal_instances.csv
+# ---- Datasets (true = used; each has a reader in src/aneurysm/data/sources/) ----
+datasets:
+  zenodo_la: true
 
-# ---- Outputs made by the code ----
-work_subdir: work                                      # splits/ and patches/ are written here
+# ---- Preprocessed data (inside the project; the raw datasets are only read) ----
+work_subdir: work                # -> work/<dataset>/splits.csv and work/<dataset>/patches/<setting>/
 
-# ---- Split (by patient) ----
-val_frac: 0.15
-test_frac: 0.15
-split_seed: 42
-official_test_as_test: true      # Ts cases (once their scans exist) always go to "test"
+# ---- Split (by patient, per dataset) ----
+val_frac: 0.15                   # share of the "train" pool (e.g. internal_Tr*) used for validation
+split_seed: 42                   # the "test" pool (e.g. internal_Ts*) always goes to test
 
 # ---- Preprocessing ----
 spacing_mm: 0.45                 # isotropic voxel size of the patches

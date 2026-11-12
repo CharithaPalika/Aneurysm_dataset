@@ -1,7 +1,8 @@
-"""Command-line helpers shared by the scripts in scripts/ (run_prepare_data, run_train, run_eval)."""
+"""Command-line helpers shared by the scripts in scripts/ (run_preprocess, run_train, run_eval)."""
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 import yaml
@@ -43,8 +44,12 @@ def add_set_arg(parser: argparse.ArgumentParser, flag: str, what: str) -> None:
 
 
 def print_header(title: str, configs: dict[str, Path], overrides: dict[str, dict]) -> None:
-    """Print which config files and overrides a script uses (also ends up in the terminal log)."""
+    """Print which config files and overrides a script uses (also ends up in the terminal log).
+    Multi-GPU (torchrun): only the first process prints."""
     from .env import describe_environment
+
+    if not is_main_process():
+        return
 
     print(f"===== {title} =====")
     for name, path in configs.items():
@@ -55,3 +60,8 @@ def print_header(title: str, configs: dict[str, Path], overrides: dict[str, dict
     env = describe_environment()
     print("environment : " + ", ".join(f"{k}={v}" for k, v in env.items() if k != "platform"))
     print()
+
+
+def is_main_process() -> bool:
+    """False for the extra processes of a multi-GPU run (torchrun sets RANK)."""
+    return int(os.environ.get("RANK", "0")) == 0

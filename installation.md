@@ -35,14 +35,12 @@ git clone <your repo URL> Aneurysm_dataset
 cd Aneurysm_dataset
 git clone https://github.com/HINTLab/LeFusion.git     # only if LeFusion/ is missing
 ```
-Put the data in `Dataset/` (git-ignored):
+The dataset can be anywhere (it is only read, never written). Set its path once in
+`configs/data/sources/zenodo_la.yaml`:
+```yaml
+root: "C:/Users/<you>/Datasets/Zenodo/Data"     # the Data/ folder with internal_Tr*, internal_Ts*, internal_annotation/
 ```
-Dataset/
-├── CTA_scans/internal_Tr01/            Tr0001.nii.gz ...   (more internal_* folders are picked up)
-├── Annotations/internal_annotation/    Tr0001.nii.gz ... Ts0152.nii.gz
-└── internal_instances.csv
-```
-Other locations are set in `configs/data/data.yaml` (`scans_subdir`, `masks_subdir`, `instances_csv`).
+Details and other datasets: [runbook.md](runbook.md), section 0.
 
 ---
 

@@ -36,7 +36,7 @@ def load_trained_model(run_dir: Path, checkpoint: str = "best", device=None, use
         available = sorted(p.name for p in path.parent.glob("*.pt"))
         raise FileNotFoundError(f"{path} not found. Available: {available}")
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    ck = torch.load(path, map_location=device)
+    ck = torch.load(path, map_location=device, weights_only=False)   # our own file (holds RNG states)
 
     data_names = {f.name for f in fields(DataConfig)} - {"project_root"}
     data_cfg = DataConfig(project_root=project_root,

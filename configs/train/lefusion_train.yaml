@@ -12,6 +12,12 @@ resume: true                      # continue from <run>/checkpoints/latest.pt if
 seed: 42                          # same seed + same data + same settings -> same run
 deterministic: true               # deterministic cuDNN (a bit slower, more reproducible)
 
+# ---- Data source ----
+preprocess: false                 # false: use the preprocessed work dir only (run scripts/run_preprocess.py first)
+                                  # true:  cut missing patches from Dataset/ before training
+work_dir: null                    # folder with the preprocessed data (splits/ + patches/);
+                                  # null = work_subdir in configs/data/data.yaml (default work/)
+
 # ---- Network (LeFusion Unet3D) ----
 base_channels: 32                 # paper: 64. 32 for the 4 GB pilot GPU (64 does not fit)
 dim_mults: [1, 2, 4, 8]           # channels per level = base_channels * mult
@@ -24,8 +30,8 @@ loss_type: l1                     # l1 (LeFusion code) or l2
 
 # ---- Optimisation ----
 lr: 1.0e-4
-batch_size: 1                     # per forward pass; 4 GB GPU -> 1
-grad_accum: 4                     # effective batch = batch_size * grad_accum
+batch_size: 1                     # per GPU and forward pass; 4 GB GPU -> 1
+grad_accum: 4                     # effective batch = batch_size * grad_accum * GPUs
 max_steps: 10000                  # optimiser steps (README: 20k-50k for full data)
 grad_clip: 1.0                    # max gradient norm (null = off)
 amp: true                         # mixed precision (fp16) on CUDA

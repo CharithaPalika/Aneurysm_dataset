@@ -111,12 +111,16 @@ def _seed_worker(worker_id: int) -> None:
 
 def make_dataloaders(index: pd.DataFrame, cfg: DataConfig, batch_size: int = 2,
                      num_workers: int | None = None, pin_memory: bool | None = None,
-                     seed: int = 42) -> dict:
+                     seed: int = 42, rank: int = 0, world_size: int = 1) -> dict:
     """DataLoaders for "train", "val" and "test" (empty splits are skipped).
 
     train: shuffled + augmented; val/test: fixed order, no augmentation.
     `seed` fixes the shuffle order and the augmentations.
+    world_size > 1 (multi-GPU): each process gets its own part of the train split
+    (DistributedSampler); `batch_size` is then per GPU. Call loader.sampler.set_epoch(e) every epoch.
     """
+    from torch.utils.data.distributed import DistributedSampler
+
     num_workers = default_num_workers() if num_workers is None else num_workers
     if pin_memory is None:
         pin_memory = torch.cuda.is_available()
@@ -126,15 +130,19 @@ def make_dataloaders(index: pd.DataFrame, cfg: DataConfig, batch_size: int = 2,
         ds = AneurysmPatchDataset(index, cfg, split)
         if len(ds) == 0:
             continue
+        train = split == "train"
+        sampler = (DistributedSampler(ds, num_replicas=world_size, rank=rank, shuffle=True, seed=seed,
+                                      drop_last=True) if train and world_size > 1 else None)
         loaders[split] = DataLoader(
             ds,
             batch_size=batch_size,
-            shuffle=(split == "train"),
-            drop_last=(split == "train" and len(ds) > batch_size),
+            shuffle=train and sampler is None,
+            sampler=sampler,
+            drop_last=(train and len(ds) > batch_size * world_size),
             num_workers=num_workers,
             pin_memory=pin_memory,
             persistent_workers=num_workers > 0,
             worker_init_fn=_seed_worker,
-            generator=torch.Generator().manual_seed(seed + k),
+            generator=torch.Generator().manual_seed(seed + k + 1000 * rank),
         )
     return loaders

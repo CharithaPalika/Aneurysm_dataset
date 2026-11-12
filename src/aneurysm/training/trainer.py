@@ -31,6 +31,7 @@ with resume=True continues from it.
 """
 from __future__ import annotations
 
+import contextlib
 import copy
 import csv
 import math
@@ -45,10 +46,11 @@ import yaml
 
 from ..config import DataConfig, RunPaths, TrainConfig
 from ..data.datasets import make_dataloaders
-from ..data.pipeline import prepare_data
+from ..data.pipeline import get_data
 from ..data.intensity import norm_to_hu
 from ..utils.env import default_num_workers, describe_environment, get_device
 from ..utils.plotting import plot_rows
+from . import distributed as ddp_utils
 from .model import build_diffusion, count_parameters
 from .sampling import generate
 
@@ -117,6 +119,22 @@ class RunLogger:
         self._mfile.close()
 
 
+class NullLogger:
+    """Used by the other GPUs in a multi-GPU run: only rank 0 writes logs."""
+
+    def __init__(self):
+        self.history: list[dict] = []
+
+    def print(self, msg: str = "") -> None:
+        pass
+
+    def metrics(self, step: int, kind: str, values: dict) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
 class EMA:
     """Exponential moving average of the network weights (smoother, used for samples)."""
 
@@ -140,10 +158,14 @@ class EMA:
 
 
 def _forever(loader):
-    """Loop over a DataLoader forever (reshuffles every epoch)."""
+    """Loop over a DataLoader forever (reshuffles every epoch; multi-GPU: new order per epoch)."""
+    epoch = 0
     while True:
+        if hasattr(loader.sampler, "set_epoch"):
+            loader.sampler.set_epoch(epoch)
         for batch in loader:
             yield batch
+        epoch += 1
 
 
 def _gpu_mem_gb(device) -> float:
@@ -213,7 +235,7 @@ def evaluate(diffusion, loader, device, timesteps: list[int], max_batches: int, 
             tt = torch.full((x.shape[0],), t, device=device, dtype=torch.long)
             with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=amp):
                 loss = diffusion.p_losses(x_start=x, t=tt, mask=m, cond=h, noise=noise)
-            per_t[t].append(float(loss))
+            per_t[t].append(loss.detach().item())
     diffusion.train()
     out = {f"val_t{t}": float(np.mean(v)) for t, v in per_t.items() if v}
     out["val_loss"] = float(np.mean(list(out.values()))) if out else float("nan")
@@ -255,29 +277,40 @@ def train(data_cfg: DataConfig, train_cfg: TrainConfig) -> dict:
     import pandas as pd
 
     train_cfg.validate()
-    seed_everything(train_cfg.seed, train_cfg.deterministic)
-    device = get_device()
+    data_cfg = data_cfg.with_work_dir(train_cfg.work_dir)
+    dist = ddp_utils.setup(get_device())               # multi-GPU when started with torchrun
+    device = dist.device
+    # rank 0 uses exactly `seed` (same as a single-GPU run); other GPUs draw different noise
+    seed_everything(train_cfg.seed + dist.rank, train_cfg.deterministic)
     use_amp = bool(train_cfg.amp and device.type == "cuda")
 
     # ---- run folder: <output_dir>/<run_name>/ ----
     paths = RunPaths(data_cfg.project_root / train_cfg.output_dir / train_cfg.run_name)
     run_dir, ckpt_dir, sample_dir = paths.root, paths.checkpoints, paths.samples
-    ckpt_dir.mkdir(parents=True, exist_ok=True)
-    sample_dir.mkdir(parents=True, exist_ok=True)
-    logger = RunLogger(run_dir)
+    if dist.is_main:
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        sample_dir.mkdir(parents=True, exist_ok=True)
+    ddp_utils.barrier(dist)
+    logger = RunLogger(run_dir) if dist.is_main else NullLogger()
     say = logger.print
 
     env = describe_environment()
     say(f"=== Run '{train_cfg.run_name}'  |  {time.strftime('%Y-%m-%d %H:%M:%S')}  |  seed {train_cfg.seed} ===")
-    say(f"Device: {device}" + (f" ({env.get('gpu')}, {env.get('gpu_memory_gb')} GB)" if device.type == "cuda" else ""))
+    say(f"Device: {device}" + (f" ({env.get('gpu')}, {env.get('gpu_memory_gb')} GB)" if device.type == "cuda" else "")
+        + (f" | {dist.world_size} GPUs (DistributedDataParallel)" if dist.enabled else ""))
     if device.type != "cuda":
         say("Note: no CUDA GPU - training will be very slow. Use the Windows GPU machine for real runs.")
 
-    # ---- data ----
-    data = prepare_data(data_cfg)
+    # ---- data: preprocessed work dir only, or preprocess first ----
+    # multi-GPU: only rank 0 may cut patches (no two processes writing the same files)
+    if train_cfg.preprocess and dist.is_main:
+        get_data(data_cfg, preprocess=True)
+    ddp_utils.barrier(dist)
+    data = get_data(data_cfg, preprocess=False, verbose=dist.is_main)
     workers = default_num_workers() if train_cfg.num_workers is None else train_cfg.num_workers
     loaders = make_dataloaders(data["index"], data_cfg, batch_size=train_cfg.batch_size,
-                               num_workers=workers, seed=train_cfg.seed)
+                               num_workers=workers, seed=train_cfg.seed,
+                               rank=dist.rank, world_size=dist.world_size)
     if "train" not in loaders:
         raise RuntimeError("No training patches found. Check the data paths in configs/data/data.yaml.")
     val_loader = loaders.get("val")
@@ -295,12 +328,14 @@ def train(data_cfg: DataConfig, train_cfg: TrainConfig) -> dict:
     opt = torch.optim.Adam(diffusion.parameters(), lr=train_cfg.lr)
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
     ema = EMA(diffusion, train_cfg.ema_decay, train_cfg.ema_start, train_cfg.ema_every)
+    say(f"Batch: {train_cfg.batch_size} per GPU x {train_cfg.grad_accum} accumulation x {dist.world_size} GPU(s) "
+        f"= effective {train_cfg.batch_size * train_cfg.grad_accum * dist.world_size}")
 
     # ---- resume ----
     step, best_val = 0, float("inf")
     latest = paths.checkpoint("latest")
     if train_cfg.resume and latest.exists():
-        ck = torch.load(latest, map_location=device)
+        ck = torch.load(latest, map_location=device, weights_only=False)   # our own file (holds RNG states)
         # the network shape must be the same as in the checkpoint, otherwise the weights do not fit
         arch_keys = ("base_channels", "dim_mults", "attn_heads", "attn_dim_head", "timesteps")
         old = ck.get("train_cfg", {})
@@ -321,6 +356,8 @@ def train(data_cfg: DataConfig, train_cfg: TrainConfig) -> dict:
         scaler.load_state_dict(ck["scaler"])
         if "rng" in ck:
             _set_rng_state(ck["rng"])
+        if dist.rank > 0:                                  # the saved random state is rank 0's
+            seed_everything(train_cfg.seed + dist.rank + int(ck["step"]), train_cfg.deterministic)
         step, best_val = int(ck["step"]), float(ck.get("best_val", best_val))
         say(f"Resumed from checkpoints/latest.pt at step {step} (best val loss {best_val:.4f})")
     elif latest.exists():
@@ -331,13 +368,21 @@ def train(data_cfg: DataConfig, train_cfg: TrainConfig) -> dict:
 
     # settings used for this run (a resumed run gets its own file, the first one is kept)
     cfg_path = paths.config if step == 0 else run_dir / f"config_resume_step{step:06d}.yaml"
-    with open(cfg_path, "w", encoding="utf-8") as f:
-        yaml.safe_dump({"data": _plain(data_cfg.to_dict()), "train": train_cfg.to_dict()}, f, sort_keys=False)
+    if dist.is_main:
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            yaml.safe_dump({"data": _plain(data_cfg.to_dict()), "train": train_cfg.to_dict(),
+                            "gpus": dist.world_size}, f, sort_keys=False)
 
     if step >= train_cfg.max_steps:
         say(f"Already at step {step} >= max_steps {train_cfg.max_steps}. Increase max_steps to continue.")
         logger.close()
         return {"run_dir": run_dir, "history": pd.DataFrame(logger.history), "best_val": best_val, "step": step}
+
+    # ---- multi-GPU: wrap the model; gradients are averaged over the GPUs ----
+    model = diffusion
+    if dist.enabled:
+        from torch.nn.parallel import DistributedDataParallel
+        model = DistributedDataParallel(diffusion, device_ids=[dist.local_rank] if device.type == "cuda" else None)
 
     # ---- memory check (one forward + backward, no weight update) ----
     train_iter = _forever(loaders["train"])
@@ -346,7 +391,7 @@ def train(data_cfg: DataConfig, train_cfg: TrainConfig) -> dict:
         b = next(train_iter)
         try:
             with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=use_amp):
-                loss = diffusion(x=(b["image"].to(device), b["hist"].to(device)), mask=b["center_mask"].to(device))
+                loss = model(x=(b["image"].to(device), b["hist"].to(device)), mask=b["center_mask"].to(device))
             scaler.scale(loss).backward()
             opt.zero_grad(set_to_none=True)
             # peak memory reserved by PyTorch, plus ~0.4 GB for the CUDA context itself
@@ -373,25 +418,30 @@ def train(data_cfg: DataConfig, train_cfg: TrainConfig) -> dict:
 
     # ---- training loop ----
     say(f"\nTraining steps {step} -> {train_cfg.max_steps} | effective batch "
-        f"{train_cfg.batch_size * train_cfg.grad_accum} | outputs: {data_cfg.rel(run_dir)}\n")
+        f"{train_cfg.batch_size * train_cfg.grad_accum * dist.world_size} | outputs: {data_cfg.rel(run_dir)}\n")
     diffusion.train()
     window, t_start, t_window, start_step = [], time.time(), time.time(), step
 
     def checkpoint(name: str) -> None:
-        save_checkpoint(ckpt_dir / name, step, diffusion, ema, opt, scaler, data_cfg, train_cfg, best_val)
+        if dist.is_main:
+            save_checkpoint(ckpt_dir / name, step, diffusion, ema, opt, scaler, data_cfg, train_cfg, best_val)
 
     try:
         while step < train_cfg.max_steps:
             # -- one optimiser step = grad_accum mini-batches --
             opt.zero_grad(set_to_none=True)
             step_loss = 0.0
-            for _ in range(train_cfg.grad_accum):
+            for micro in range(train_cfg.grad_accum):
                 b = next(train_iter)
-                with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=use_amp):
-                    loss = diffusion(x=(b["image"].to(device, non_blocking=True), b["hist"].to(device)),
+                # multi-GPU: sync gradients only on the last mini-batch of the step (faster)
+                sync = (not dist.enabled) or micro == train_cfg.grad_accum - 1
+                with (contextlib.nullcontext() if sync else model.no_sync()):
+                    with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=use_amp):
+                        loss = model(x=(b["image"].to(device, non_blocking=True), b["hist"].to(device)),
                                      mask=b["center_mask"].to(device, non_blocking=True))
-                scaler.scale(loss / train_cfg.grad_accum).backward()
-                step_loss += float(loss) / train_cfg.grad_accum
+                    scaler.scale(loss / train_cfg.grad_accum).backward()
+                step_loss += loss.detach().item() / train_cfg.grad_accum
+            step_loss = ddp_utils.mean_over_gpus(step_loss, dist)      # same value on every GPU
 
             if not math.isfinite(step_loss):
                 say(f"step {step}: loss is {step_loss}, skipping this update")
@@ -417,7 +467,7 @@ def train(data_cfg: DataConfig, train_cfg: TrainConfig) -> dict:
                 window, t_window = [], time.time()
 
             # -- validation loss --
-            if val_loader is not None and (step % train_cfg.eval_every == 0 or step == train_cfg.max_steps):
+            if dist.is_main and val_loader is not None and (step % train_cfg.eval_every == 0 or step == train_cfg.max_steps):
                 res = evaluate(diffusion, val_loader, device, train_cfg.eval_timesteps,
                                train_cfg.eval_max_batches, use_amp)
                 improved = res["val_loss"] < best_val
@@ -430,7 +480,7 @@ def train(data_cfg: DataConfig, train_cfg: TrainConfig) -> dict:
                 logger.metrics(step, "val", res)
 
             # -- preview samples --
-            if sample_items and step % train_cfg.sample_every == 0:
+            if dist.is_main and sample_items and step % train_cfg.sample_every == 0:
                 t0 = time.time()
                 png = sample_dir / f"step_{step:06d}.png"
                 stats = save_samples(ema.model, sample_items, data_cfg, train_cfg, device, png,
@@ -443,7 +493,14 @@ def train(data_cfg: DataConfig, train_cfg: TrainConfig) -> dict:
             if step % train_cfg.save_every == 0 or step == train_cfg.max_steps:
                 checkpoint(f"step_{step:06d}.pt")
                 checkpoint("latest.pt")
-                _prune_checkpoints(ckpt_dir, train_cfg.keep_last)
+                if dist.is_main:
+                    _prune_checkpoints(ckpt_dir, train_cfg.keep_last)
+
+            # multi-GPU: wait for rank 0 after validation / samples / checkpoints
+            if dist.enabled and (step % train_cfg.eval_every == 0 or step % train_cfg.save_every == 0
+                                 or (train_cfg.sample_every > 0 and step % train_cfg.sample_every == 0)
+                                 or step == train_cfg.max_steps):
+                ddp_utils.barrier(dist)
 
     except KeyboardInterrupt:
         say(f"\nStopped by user at step {step}. Saving checkpoints/latest.pt ...")

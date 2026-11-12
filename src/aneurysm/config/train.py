@@ -18,6 +18,10 @@ class TrainConfig:
     seed: int = 42
     deterministic: bool = True            # deterministic cuDNN (slightly slower, more reproducible)
 
+    # ---- data source ----
+    preprocess: bool = False              # True: cut missing patches from Dataset/ first; False: use work dir only
+    work_dir: str | None = None           # preprocessed data (splits/ + patches/); None = work_subdir of data config
+
     # ---- network ----
     base_channels: int = 64
     dim_mults: list = field(default_factory=lambda: [1, 2, 4, 8])

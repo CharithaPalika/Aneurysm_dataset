@@ -6,7 +6,11 @@ Examples (from the project folder):
     python scripts/run_train.py --set run_name=pilot_small base_channels=32 "dim_mults=[1,2,4,4]" attn_heads=4
     python scripts/run_train.py --data-set patch_depth=24
 
+Multi-GPU (one process per GPU; batch_size is per GPU):
+    torchrun --standalone --nproc_per_node=4 scripts/run_train.py --config configs/train/lefusion_train_a100.yaml
+
 Outputs go to outputs/<run_name>/. Ctrl+C saves checkpoints/latest.pt; the same command resumes.
+Before a long run: python scripts/run_smoke_test.py (same options).
 """
 from __future__ import annotations
 
@@ -28,7 +32,8 @@ matplotlib.use("Agg")                                # figures are saved to file
 from aneurysm.config import (DEFAULT_DATA_CONFIG, DEFAULT_TRAIN_CONFIG, load_data_config,  # noqa: E402
                              load_train_config, resolve_path)
 from aneurysm.training import train  # noqa: E402
-from aneurysm.utils.cli import add_config_arg, add_set_arg, parse_overrides, print_header  # noqa: E402
+from aneurysm.training.distributed import cleanup  # noqa: E402
+from aneurysm.utils.cli import add_config_arg, add_set_arg, is_main_process, parse_overrides, print_header  # noqa: E402
 
 
 def main() -> None:
@@ -47,8 +52,12 @@ def main() -> None:
 
     data_cfg = load_data_config(data_path, project_root=PROJECT_ROOT, overrides=data_over)
     train_cfg = load_train_config(train_path, project_root=PROJECT_ROOT, overrides=train_over)
-    result = train(data_cfg, train_cfg)
-    print(f"\nRun folder: {data_cfg.rel(result['run_dir'])}/")
+    try:
+        result = train(data_cfg, train_cfg)
+    finally:
+        cleanup()
+    if is_main_process():
+        print(f"\nRun folder: {data_cfg.rel(result['run_dir'])}/")
 
 
 if __name__ == "__main__":

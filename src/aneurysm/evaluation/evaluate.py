@@ -35,10 +35,11 @@ import yaml
 from scipy import ndimage
 
 from ..config import EvalConfig, RunPaths, find_project_root, resolve_path
+from ..config.data import load_source_settings
 from ..data.datasets import AneurysmPatchDataset
 from ..data.intensity import hu_to_norm, norm_to_hu
-from ..data.catalog import build_catalog
-from ..data.pipeline import load_cached_data, prepare_data
+from ..data.catalog import build_catalog, resolve_case_path
+from ..data.pipeline import get_data
 from ..data.pseudo_healthy import ball, dilate, make_pseudo_healthy
 from ..data.volume import load_canonical, model_patch_affine, paste_patch_into_volume
 from ..training.sampling import generate, load_trained_model
@@ -128,13 +129,13 @@ def _load_run(cfg: EvalConfig, root: Path, device) -> dict:
     diffusion, data_cfg, train_cfg, info = load_trained_model(run_dir, cfg.checkpoint, device, cfg.use_ema, root)
     _say(f"Model: {_show(info['path'], root)} | step {info['step']} | {info['weights']} weights | "
          f"best val loss {info['best_val']:.4f} | device {device}")
-    # patches of the trained setting: from work/ if already cut, else cut them from Dataset/
-    data = load_cached_data(data_cfg)
-    if data is not None:
-        _say(f"Patches: {_show(data_cfg.patch_dir, root)}/ (cached, Dataset/ not needed)")
-    else:
-        _say(f"Patches: not cached for {data_cfg.patch_tag} -> preparing them from Dataset/")
-        data = prepare_data(data_cfg, verbose=False)
+    # patches of the trained setting: from the work dir only, or preprocess first (needs Dataset/)
+    # dataset roots come from THIS machine's configs/data/sources/*.yaml (not from the training machine)
+    data_cfg = data_cfg.with_work_dir(cfg.work_dir).with_sources(
+        load_source_settings(data_cfg.enabled_datasets, root))
+    data = get_data(data_cfg, preprocess=cfg.preprocess, verbose=False)
+    _say(f"Patches: {data_cfg.patch_tag} of {data_cfg.enabled_datasets} in {_show(data_cfg.work_dir, root)}/ "
+         f"({'preprocessed now' if cfg.preprocess else 'preprocessed'})")
     ds = AneurysmPatchDataset(data["index"], data_cfg, cfg.split, augment=False)
     if len(ds) == 0:
         raise RuntimeError(f"No patches in split '{cfg.split}'.")
@@ -385,7 +386,7 @@ def run_full_scan(pid: str, cases: list[dict], gens: dict, data: dict, data_cfg,
                   show: bool) -> Path:
     """Paste the case-1 aneurysm of `pid` back into its CT scan; save NIfTI + 3-plane figure.
 
-    Needs the original scan in Dataset/. Returns None (skipped) if it is not there.
+    Needs the original scan (dataset root on this machine). Returns None (skipped) if it is not there.
     """
     import nibabel as nib
 
@@ -398,12 +399,14 @@ def run_full_scan(pid: str, cases: list[dict], gens: dict, data: dict, data_cfg,
         except FileNotFoundError as exc:
             _say(f"   skipped: the original scan is needed ({exc})")
             return None
-    case = catalog.set_index("case_id").loc[row.case_id]
-    if not case["image_path"] or not data_cfg.abs(case["image_path"]).exists():
-        _say(f"   skipped: scan of {row.case_id} not found in {_show(data_cfg.scans_dir, root)}/")
+    case = catalog.set_index("case_id").loc[row.case_id].copy()
+    case["case_id"] = row.case_id
+    image_file = resolve_case_path(data_cfg, case, "image_path") if case["image_path"] else None
+    if image_file is None or not image_file.exists():
+        _say(f"   skipped: scan of {row.case_id} not found")
         return None
-    vol, aff, spacing = load_canonical(data_cfg.abs(case["image_path"]))
-    full_mask, _, _ = load_canonical(data_cfg.abs(case["mask_path"]), is_mask=True)
+    vol, aff, spacing = load_canonical(image_file)
+    full_mask, _, _ = load_canonical(resolve_case_path(data_cfg, case, "mask_path"), is_mask=True)
     with np.load(data_cfg.abs(row.patch_path)) as f:
         stored_affine = f["affine"]
     c = next(c for c in cases if c["patch_id"] == pid)

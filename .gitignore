@@ -24,3 +24,6 @@ Thumbs.db
 
 # pip install -e . build files
 build/
+
+# local change notes (not published)
+CHANGELOG.md

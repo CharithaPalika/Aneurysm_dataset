@@ -15,6 +15,12 @@ output_dir: outputs
 checkpoint: best                  # best | latest | step_001000 ...
 use_ema: true                     # EMA weights (smoother samples)
 
+# ---- Data source ----
+preprocess: false                 # false: use the preprocessed work dir only (Dataset/ not needed)
+                                  # true:  cut missing patches from Dataset/ first
+work_dir: null                    # folder with the preprocessed data; null = the one used in training
+                                  # (patches must be of the trained setting, chosen automatically)
+
 # ---- Which data ----
 split: val                        # val | test  (never evaluate on train)
 max_patches: 8                    # 0 = all patches of the split

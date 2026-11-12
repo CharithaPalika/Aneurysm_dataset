@@ -1,0 +1,17 @@
+# =====================================================================
+#  Dataset: intracranial aneurysm CTA, Zenodo (Bo et al., Patterns 2021)
+#  Reader: src/aneurysm/data/sources/zenodo_la.py
+#  The dataset folder is only READ. Preprocessed data goes to <project>/work/zenodo_la/.
+# =====================================================================
+
+# Path up to (and including) the Data/ folder. Absolute path; forward slashes also work on Windows.
+# Windows example: "C:/Users/<you>/Datasets/Zenodo/Data"     macOS example: "/Volumes/Data/Zenodo/Data"
+root: null
+
+# Layout inside Data/ (only change if the folder names differ)
+train_folders: "internal_Tr*"           # scans -> split into train / val
+test_folders: "internal_Ts*"            # scans -> test
+masks_folder: internal_annotation       # masks of Tr and Ts cases (same file names as the scans)
+instances_csv: internal_instances.csv   # case table (subset, institution_id, num_IAs, ...)
+file_suffix: ".nii.gz"                  # only these files are read (the .nii copies are ignored)
+# external_* folders and other files in Data/ are not used.

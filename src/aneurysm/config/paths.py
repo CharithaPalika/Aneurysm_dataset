@@ -6,8 +6,8 @@ The project root is the folder that contains src/aneurysm/ and configs/
 
     <root>/configs/{data,train,eval}/*.yaml     settings
     <root>/LeFusion/LeFusion/ddpm/              LeFusion code (imported, unchanged)
-    <root>/<scans_subdir> ...                   data paths: configs/data/data.yaml
-    <root>/<work_subdir>/                       splits + patch cache
+    <dataset root>/...                          read-only raw data: configs/data/sources/<name>.yaml
+    <root>/<work_subdir>/<dataset>/             preprocessed data (splits.csv + patches/)
     <root>/<output_dir>/<run_name>/             one training run (layout: RunPaths)
 """
 from __future__ import annotations
@@ -15,6 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 CONFIG_DIR = Path("configs")
+SOURCES_CONFIG_DIR = CONFIG_DIR / "data" / "sources"         # one YAML per dataset: <name>.yaml
 LEFUSION_CODE_DIR = Path("LeFusion") / "LeFusion"          # folder that contains ddpm/
 ROOT_MARKERS = (Path("src") / "aneurysm", CONFIG_DIR)      # how the project root is recognised
 

@@ -18,6 +18,10 @@ class EvalConfig:
     checkpoint: str = "best"              # best | latest | step_001000 ...
     use_ema: bool = True                  # EMA weights (smoother samples)
 
+    # ---- data source ----
+    preprocess: bool = False              # True: cut missing patches from Dataset/ first; False: use work dir only
+    work_dir: str | None = None           # preprocessed data (splits/ + patches/); None = the one used in training
+
     # ---- which data ----
     split: str = "val"                    # val | test
     max_patches: int = 8                  # patches to evaluate (0 = all)
